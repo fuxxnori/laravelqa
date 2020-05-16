@@ -87,6 +87,7 @@ class QuestionsController extends Controller
      */
     public function destroy(Question $question)
     {
-        //
+        //$question->destroy();
+        //return redirect()->route("questions.index");
     }
 }
