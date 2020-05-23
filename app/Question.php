@@ -14,6 +14,8 @@ class Question extends Model
         belongsTo(User::class);
     }
 
+    protected $appends = ["created_date"];
+
     public function answers()
     {
         return $this->hasMany(Answer::class)->orderBy("votes_count", "DESC");
