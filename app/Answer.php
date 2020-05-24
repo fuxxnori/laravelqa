@@ -14,7 +14,7 @@ class Answer extends Model
         return $this->belongsTo(Question::class);
     }
 
-    protected $appends = ["created_date"];
+    protected $appends = ["created_date","htmlbody"];
 
     public function user()
     {
