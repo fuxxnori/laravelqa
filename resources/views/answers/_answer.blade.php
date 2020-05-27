@@ -1,8 +1,7 @@
 <answer :answer="{{$answer}}" inline-template>
     <div class="media post">
-        @include("shared._vote",[
-            "model"=>$answer
-        ])
+        <vote :model="{{$answer}}" name="answer"></vote>
+        {{-- modelの前にコロンをつけないとpropsには値が渡るがdataやcomputed,methodsで値を参照できない --}}
         
         <div class="media-body">
             <form v-if="editing">
