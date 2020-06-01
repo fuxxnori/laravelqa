@@ -11,7 +11,7 @@
                 <button class="btn btn-outline-secondary" @click="cancel">Cancel</button>
             </form>
             <div v-else>
-                <div v-html="htmlbody"></div>
+                <div v-html="bodyhtml"></div>
                 <div class="row">
                     <div class="col-4">
                         <div class="ml-auto">
@@ -32,16 +32,18 @@
 <script>
 import Vote from "./Vote.vue";
 import UserInfo from "./UserInfo.vue";
+import modification from "../mixins/modification.js";
 export default {
     props:["answer"],
+
+    mixins:[modification],
 
     components:{Vote,UserInfo},
 
     data(){
         return {
-            editing:false,
             body:this.answer.body,
-            htmlbody:this.answer.htmlbody,
+            bodyhtml:this.answer.bodyhtml,
             id:this.answer.id,
             questionId:this.answer.question_id,
             beforeEditCache:null
@@ -49,49 +51,23 @@ export default {
     },
 
     methods:{
-        edit(){
+        setEditCache(){
             this.beforeEditCache=this.body;
-            this.editing = true;
         },
-        cancel(){
+        restoreFromCache(){
             this.body = this.beforeEditCache;
-            this.editing = false;
         },
-        update(){
-            axios.patch(this.endpoint,{
+        payload(){
+            return{
                 body:this.body
-            })
-            .then(res => {
-                this.editing = false;
-                this.htmlbody = res.data.htmlbody;
-                this.$toast.success(res.data.message,"Success",{timeout:3000});
-            })
-            .catch(err => {
-                this.$toast.error(err.data.message,"Error",{timeout:3000});
-            });
+            }
         },
-        destroy(){
-            this.$toast.question('Are you sure about that?',"Confirm",{
-            timeout: 20000,
-            close: false,
-            overlay: true,
-            displayMode: 'once',
-            id: 'question',
-            zindex: 999,
-            position: 'center',
-            buttons: [
-                ['<button><b>YES</b></button>', (instance, toast)=>{
-                axios.delete(this.endpoint)
-                .then(res=>{
+        delete(){
+            axios.delete(this.endpoint)
+                .then(({data})=>{
+                    this.$toast.success(data.message,"Success",{timeout:2000});
                     this.$emit("deleted");
                 });
-            instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-                }, true],
-                ['<button>NO</button>', function (instance, toast) {
-                    instance.hide({ transitionOut: 'fadeOut' }, toast, 'button');
-                }],
-            ],
-            });
         }
     },
 

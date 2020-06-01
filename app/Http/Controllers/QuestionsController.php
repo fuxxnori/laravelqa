@@ -82,7 +82,7 @@ class QuestionsController extends Controller
         if($request->expectsJson()){
             return response()->json([
                 "message"=>"Your question has been updated",
-                "body_html"=>$question->body_html
+                "bodyhtml"=>$question->body_html
             ]);
         }
         return redirect()->route("questions.index")->with("success", "Your question has been updated");

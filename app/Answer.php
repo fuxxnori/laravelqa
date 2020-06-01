@@ -14,14 +14,14 @@ class Answer extends Model
         return $this->belongsTo(Question::class);
     }
 
-    protected $appends = ["created_date","htmlbody","is_best"];
+    protected $appends = ["created_date","bodyhtml","is_best"];
 
     public function user()
     {
         return $this->belongsTo(User::class);
     }
 
-    public function getHtmlBodyAttribute()
+    public function getBodyHtmlAttribute()
     {
         return clean(\Parsedown::instance()->text($this->body));
     }

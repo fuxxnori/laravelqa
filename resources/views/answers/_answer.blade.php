@@ -12,7 +12,7 @@
                 <button class="btn btn-outline-secondary" @click="cancel">Cancel</button>
             </form>
             <div v-else>
-                <div v-html="htmlbody"></div>
+                <div v-html="bodyhtml"></div>
                 <div class="row">
                     <div class="col-4">
                         <div class="ml-auto">
