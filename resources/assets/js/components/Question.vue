@@ -10,7 +10,9 @@
                     <div class="media">
                         <div class="media-body">
                             <div class="form-group">
-                                <textarea rows="10" v-model="body" class="form-control" required></textarea>
+                                <m-editor :body="body">
+                                    <textarea rows="10" v-model="body" class="form-control" required></textarea>
+                                </m-editor>
                             </div>
                             <button class="btn btn-primary" type="button" @click.prevent="update" :disabled="isInvalid">Update</button>
                             <button class="btn btn-outline-secondary" @click.prevent="cancel">Cancel</button>
@@ -56,11 +58,12 @@
 <script>
 import Vote from "./Vote.vue";
 import UserInfo from "./UserInfo.vue";
-import modification from "../mixins/modification.js"
+import MEditor from "../components/MEditor.vue"
+import modification from "../mixins/modification.js";
 export default {
-    components:{Vote,UserInfo},
-
     props:["question"],
+    
+    components:{Vote,UserInfo,MEditor},
 
     mixins:[modification],
 
