@@ -60,7 +60,7 @@
 /******/ 	__webpack_require__.p = "/";
 /******/
 /******/ 	// Load entry module and return exports
-/******/ 	return __webpack_require__(__webpack_require__.s = 17);
+/******/ 	return __webpack_require__(__webpack_require__.s = 82);
 /******/ })
 /************************************************************************/
 /******/ ([
@@ -68,10 +68,802 @@
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
+// Utilities
+//
 
 
-var bind = __webpack_require__(6);
-var isBuffer = __webpack_require__(25);
+
+function _class(obj) { return Object.prototype.toString.call(obj); }
+
+function isString(obj) { return _class(obj) === '[object String]'; }
+
+var _hasOwnProperty = Object.prototype.hasOwnProperty;
+
+function has(object, key) {
+  return _hasOwnProperty.call(object, key);
+}
+
+// Merge objects
+//
+function assign(obj /*from1, from2, from3, ...*/) {
+  var sources = Array.prototype.slice.call(arguments, 1);
+
+  sources.forEach(function (source) {
+    if (!source) { return; }
+
+    if (typeof source !== 'object') {
+      throw new TypeError(source + 'must be object');
+    }
+
+    Object.keys(source).forEach(function (key) {
+      obj[key] = source[key];
+    });
+  });
+
+  return obj;
+}
+
+// Remove element from array and put another array at those position.
+// Useful for some operations with tokens
+function arrayReplaceAt(src, pos, newElements) {
+  return [].concat(src.slice(0, pos), newElements, src.slice(pos + 1));
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+function isValidEntityCode(c) {
+  /*eslint no-bitwise:0*/
+  // broken sequence
+  if (c >= 0xD800 && c <= 0xDFFF) { return false; }
+  // never used
+  if (c >= 0xFDD0 && c <= 0xFDEF) { return false; }
+  if ((c & 0xFFFF) === 0xFFFF || (c & 0xFFFF) === 0xFFFE) { return false; }
+  // control codes
+  if (c >= 0x00 && c <= 0x08) { return false; }
+  if (c === 0x0B) { return false; }
+  if (c >= 0x0E && c <= 0x1F) { return false; }
+  if (c >= 0x7F && c <= 0x9F) { return false; }
+  // out of range
+  if (c > 0x10FFFF) { return false; }
+  return true;
+}
+
+function fromCodePoint(c) {
+  /*eslint no-bitwise:0*/
+  if (c > 0xffff) {
+    c -= 0x10000;
+    var surrogate1 = 0xd800 + (c >> 10),
+        surrogate2 = 0xdc00 + (c & 0x3ff);
+
+    return String.fromCharCode(surrogate1, surrogate2);
+  }
+  return String.fromCharCode(c);
+}
+
+
+var UNESCAPE_MD_RE  = /\\([!"#$%&'()*+,\-.\/:;<=>?@[\\\]^_`{|}~])/g;
+var ENTITY_RE       = /&([a-z#][a-z0-9]{1,31});/gi;
+var UNESCAPE_ALL_RE = new RegExp(UNESCAPE_MD_RE.source + '|' + ENTITY_RE.source, 'gi');
+
+var DIGITAL_ENTITY_TEST_RE = /^#((?:x[a-f0-9]{1,8}|[0-9]{1,8}))/i;
+
+var entities = __webpack_require__(22);
+
+function replaceEntityPattern(match, name) {
+  var code = 0;
+
+  if (has(entities, name)) {
+    return entities[name];
+  }
+
+  if (name.charCodeAt(0) === 0x23/* # */ && DIGITAL_ENTITY_TEST_RE.test(name)) {
+    code = name[1].toLowerCase() === 'x' ?
+      parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+
+    if (isValidEntityCode(code)) {
+      return fromCodePoint(code);
+    }
+  }
+
+  return match;
+}
+
+/*function replaceEntities(str) {
+  if (str.indexOf('&') < 0) { return str; }
+
+  return str.replace(ENTITY_RE, replaceEntityPattern);
+}*/
+
+function unescapeMd(str) {
+  if (str.indexOf('\\') < 0) { return str; }
+  return str.replace(UNESCAPE_MD_RE, '$1');
+}
+
+function unescapeAll(str) {
+  if (str.indexOf('\\') < 0 && str.indexOf('&') < 0) { return str; }
+
+  return str.replace(UNESCAPE_ALL_RE, function (match, escaped, entity) {
+    if (escaped) { return escaped; }
+    return replaceEntityPattern(match, entity);
+  });
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+var HTML_ESCAPE_TEST_RE = /[&<>"]/;
+var HTML_ESCAPE_REPLACE_RE = /[&<>"]/g;
+var HTML_REPLACEMENTS = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;'
+};
+
+function replaceUnsafeChar(ch) {
+  return HTML_REPLACEMENTS[ch];
+}
+
+function escapeHtml(str) {
+  if (HTML_ESCAPE_TEST_RE.test(str)) {
+    return str.replace(HTML_ESCAPE_REPLACE_RE, replaceUnsafeChar);
+  }
+  return str;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+var REGEXP_ESCAPE_RE = /[.?*+^$[\]\\(){}|-]/g;
+
+function escapeRE(str) {
+  return str.replace(REGEXP_ESCAPE_RE, '\\$&');
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+function isSpace(code) {
+  switch (code) {
+    case 0x09:
+    case 0x20:
+      return true;
+  }
+  return false;
+}
+
+// Zs (unicode class) || [\t\f\v\r\n]
+function isWhiteSpace(code) {
+  if (code >= 0x2000 && code <= 0x200A) { return true; }
+  switch (code) {
+    case 0x09: // \t
+    case 0x0A: // \n
+    case 0x0B: // \v
+    case 0x0C: // \f
+    case 0x0D: // \r
+    case 0x20:
+    case 0xA0:
+    case 0x1680:
+    case 0x202F:
+    case 0x205F:
+    case 0x3000:
+      return true;
+  }
+  return false;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+/*eslint-disable max-len*/
+var UNICODE_PUNCT_RE = __webpack_require__(7);
+
+// Currently without astral characters support.
+function isPunctChar(ch) {
+  return UNICODE_PUNCT_RE.test(ch);
+}
+
+
+// Markdown ASCII punctuation characters.
+//
+// !, ", #, $, %, &, ', (, ), *, +, ,, -, ., /, :, ;, <, =, >, ?, @, [, \, ], ^, _, `, {, |, }, or ~
+// http://spec.commonmark.org/0.15/#ascii-punctuation-character
+//
+// Don't confuse with unicode punctuation !!! It lacks some chars in ascii range.
+//
+function isMdAsciiPunct(ch) {
+  switch (ch) {
+    case 0x21/* ! */:
+    case 0x22/* " */:
+    case 0x23/* # */:
+    case 0x24/* $ */:
+    case 0x25/* % */:
+    case 0x26/* & */:
+    case 0x27/* ' */:
+    case 0x28/* ( */:
+    case 0x29/* ) */:
+    case 0x2A/* * */:
+    case 0x2B/* + */:
+    case 0x2C/* , */:
+    case 0x2D/* - */:
+    case 0x2E/* . */:
+    case 0x2F/* / */:
+    case 0x3A/* : */:
+    case 0x3B/* ; */:
+    case 0x3C/* < */:
+    case 0x3D/* = */:
+    case 0x3E/* > */:
+    case 0x3F/* ? */:
+    case 0x40/* @ */:
+    case 0x5B/* [ */:
+    case 0x5C/* \ */:
+    case 0x5D/* ] */:
+    case 0x5E/* ^ */:
+    case 0x5F/* _ */:
+    case 0x60/* ` */:
+    case 0x7B/* { */:
+    case 0x7C/* | */:
+    case 0x7D/* } */:
+    case 0x7E/* ~ */:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Hepler to unify [reference labels].
+//
+function normalizeReference(str) {
+  // Trim and collapse whitespace
+  //
+  str = str.trim().replace(/\s+/g, ' ');
+
+  // In node v10 'ẞ'.toLowerCase() === 'Ṿ', which is presumed to be a bug
+  // fixed in v12 (couldn't find any details).
+  //
+  // So treat this one as a special case
+  // (remove this when node v10 is no longer supported).
+  //
+  if ('ẞ'.toLowerCase() === 'Ṿ') {
+    str = str.replace(/ẞ/g, 'ß');
+  }
+
+  // .toLowerCase().toUpperCase() should get rid of all differences
+  // between letter variants.
+  //
+  // Simple .toLowerCase() doesn't normalize 125 code points correctly,
+  // and .toUpperCase doesn't normalize 6 of them (list of exceptions:
+  // İ, ϴ, ẞ, Ω, K, Å - those are already uppercased, but have differently
+  // uppercased versions).
+  //
+  // Here's an example showing how it happens. Lets take greek letter omega:
+  // uppercase U+0398 (Θ), U+03f4 (ϴ) and lowercase U+03b8 (θ), U+03d1 (ϑ)
+  //
+  // Unicode entries:
+  // 0398;GREEK CAPITAL LETTER THETA;Lu;0;L;;;;;N;;;;03B8;
+  // 03B8;GREEK SMALL LETTER THETA;Ll;0;L;;;;;N;;;0398;;0398
+  // 03D1;GREEK THETA SYMBOL;Ll;0;L;<compat> 03B8;;;;N;GREEK SMALL LETTER SCRIPT THETA;;0398;;0398
+  // 03F4;GREEK CAPITAL THETA SYMBOL;Lu;0;L;<compat> 0398;;;;N;;;;03B8;
+  //
+  // Case-insensitive comparison should treat all of them as equivalent.
+  //
+  // But .toLowerCase() doesn't change ϑ (it's already lowercase),
+  // and .toUpperCase() doesn't change ϴ (already uppercase).
+  //
+  // Applying first lower then upper case normalizes any character:
+  // '\u0398\u03f4\u03b8\u03d1'.toLowerCase().toUpperCase() === '\u0398\u0398\u0398\u0398'
+  //
+  // Note: this is equivalent to unicode case folding; unicode normalization
+  // is a different step that is not required here.
+  //
+  // Final result should be uppercased, because it's later stored in an object
+  // (this avoid a conflict with Object.prototype members,
+  // most notably, `__proto__`)
+  //
+  return str.toLowerCase().toUpperCase();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+// Re-export libraries commonly used in both markdown-it and its plugins,
+// so plugins won't have to depend on them explicitly, which reduces their
+// bundled size (e.g. a browser build).
+//
+exports.lib                 = {};
+exports.lib.mdurl           = __webpack_require__(23);
+exports.lib.ucmicro         = __webpack_require__(144);
+
+exports.assign              = assign;
+exports.isString            = isString;
+exports.has                 = has;
+exports.unescapeMd          = unescapeMd;
+exports.unescapeAll         = unescapeAll;
+exports.isValidEntityCode   = isValidEntityCode;
+exports.fromCodePoint       = fromCodePoint;
+// exports.replaceEntities     = replaceEntities;
+exports.escapeHtml          = escapeHtml;
+exports.arrayReplaceAt      = arrayReplaceAt;
+exports.isSpace             = isSpace;
+exports.isWhiteSpace        = isWhiteSpace;
+exports.isMdAsciiPunct      = isMdAsciiPunct;
+exports.isPunctChar         = isPunctChar;
+exports.escapeRE            = escapeRE;
+exports.normalizeReference  = normalizeReference;
+
+
+/***/ }),
+/* 1 */
+/***/ (function(module, exports) {
+
+var g;
+
+// This works in non-strict mode
+g = (function() {
+	return this;
+})();
+
+try {
+	// This works if eval is allowed (see CSP)
+	g = g || Function("return this")() || (1,eval)("this");
+} catch(e) {
+	// This works if the window reference is available
+	if(typeof window === "object")
+		g = window;
+}
+
+// g can still be undefined, but nothing to do about it...
+// We return undefined, instead of nothing here, so it's
+// easier to handle this case. if(!global) { ...}
+
+module.exports = g;
+
+
+/***/ }),
+/* 2 */
+/***/ (function(module, exports) {
+
+/*
+	MIT License http://www.opensource.org/licenses/mit-license.php
+	Author Tobias Koppers @sokra
+*/
+// css base code, injected by the css-loader
+module.exports = function(useSourceMap) {
+	var list = [];
+
+	// return the list of modules as css string
+	list.toString = function toString() {
+		return this.map(function (item) {
+			var content = cssWithMappingToString(item, useSourceMap);
+			if(item[2]) {
+				return "@media " + item[2] + "{" + content + "}";
+			} else {
+				return content;
+			}
+		}).join("");
+	};
+
+	// import a list of modules into the list
+	list.i = function(modules, mediaQuery) {
+		if(typeof modules === "string")
+			modules = [[null, modules, ""]];
+		var alreadyImportedModules = {};
+		for(var i = 0; i < this.length; i++) {
+			var id = this[i][0];
+			if(typeof id === "number")
+				alreadyImportedModules[id] = true;
+		}
+		for(i = 0; i < modules.length; i++) {
+			var item = modules[i];
+			// skip already imported module
+			// this implementation is not 100% perfect for weird media query combinations
+			//  when a module is imported multiple times with different media queries.
+			//  I hope this will never occur (Hey this way we have smaller bundles)
+			if(typeof item[0] !== "number" || !alreadyImportedModules[item[0]]) {
+				if(mediaQuery && !item[2]) {
+					item[2] = mediaQuery;
+				} else if(mediaQuery) {
+					item[2] = "(" + item[2] + ") and (" + mediaQuery + ")";
+				}
+				list.push(item);
+			}
+		}
+	};
+	return list;
+};
+
+function cssWithMappingToString(item, useSourceMap) {
+	var content = item[1] || '';
+	var cssMapping = item[3];
+	if (!cssMapping) {
+		return content;
+	}
+
+	if (useSourceMap && typeof btoa === 'function') {
+		var sourceMapping = toComment(cssMapping);
+		var sourceURLs = cssMapping.sources.map(function (source) {
+			return '/*# sourceURL=' + cssMapping.sourceRoot + source + ' */'
+		});
+
+		return [content].concat(sourceURLs).concat([sourceMapping]).join('\n');
+	}
+
+	return [content].join('\n');
+}
+
+// Adapted from convert-source-map (MIT)
+function toComment(sourceMap) {
+	// eslint-disable-next-line no-undef
+	var base64 = btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap))));
+	var data = 'sourceMappingURL=data:application/json;charset=utf-8;base64,' + base64;
+
+	return '/*# ' + data + ' */';
+}
+
+
+/***/ }),
+/* 3 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/*
+	MIT License http://www.opensource.org/licenses/mit-license.php
+	Author Tobias Koppers @sokra
+*/
+
+var stylesInDom = {};
+
+var	memoize = function (fn) {
+	var memo;
+
+	return function () {
+		if (typeof memo === "undefined") memo = fn.apply(this, arguments);
+		return memo;
+	};
+};
+
+var isOldIE = memoize(function () {
+	// Test for IE <= 9 as proposed by Browserhacks
+	// @see http://browserhacks.com/#hack-e71d8692f65334173fee715c222cb805
+	// Tests for existence of standard globals is to allow style-loader
+	// to operate correctly into non-standard environments
+	// @see https://github.com/webpack-contrib/style-loader/issues/177
+	return window && document && document.all && !window.atob;
+});
+
+var getElement = (function (fn) {
+	var memo = {};
+
+	return function(selector) {
+		if (typeof memo[selector] === "undefined") {
+			memo[selector] = fn.call(this, selector);
+		}
+
+		return memo[selector]
+	};
+})(function (target) {
+	return document.querySelector(target)
+});
+
+var singleton = null;
+var	singletonCounter = 0;
+var	stylesInsertedAtTop = [];
+
+var	fixUrls = __webpack_require__(117);
+
+module.exports = function(list, options) {
+	if (typeof DEBUG !== "undefined" && DEBUG) {
+		if (typeof document !== "object") throw new Error("The style-loader cannot be used in a non-browser environment");
+	}
+
+	options = options || {};
+
+	options.attrs = typeof options.attrs === "object" ? options.attrs : {};
+
+	// Force single-tag solution on IE6-9, which has a hard limit on the # of <style>
+	// tags it will allow on a page
+	if (!options.singleton) options.singleton = isOldIE();
+
+	// By default, add <style> tags to the <head> element
+	if (!options.insertInto) options.insertInto = "head";
+
+	// By default, add <style> tags to the bottom of the target
+	if (!options.insertAt) options.insertAt = "bottom";
+
+	var styles = listToStyles(list, options);
+
+	addStylesToDom(styles, options);
+
+	return function update (newList) {
+		var mayRemove = [];
+
+		for (var i = 0; i < styles.length; i++) {
+			var item = styles[i];
+			var domStyle = stylesInDom[item.id];
+
+			domStyle.refs--;
+			mayRemove.push(domStyle);
+		}
+
+		if(newList) {
+			var newStyles = listToStyles(newList, options);
+			addStylesToDom(newStyles, options);
+		}
+
+		for (var i = 0; i < mayRemove.length; i++) {
+			var domStyle = mayRemove[i];
+
+			if(domStyle.refs === 0) {
+				for (var j = 0; j < domStyle.parts.length; j++) domStyle.parts[j]();
+
+				delete stylesInDom[domStyle.id];
+			}
+		}
+	};
+};
+
+function addStylesToDom (styles, options) {
+	for (var i = 0; i < styles.length; i++) {
+		var item = styles[i];
+		var domStyle = stylesInDom[item.id];
+
+		if(domStyle) {
+			domStyle.refs++;
+
+			for(var j = 0; j < domStyle.parts.length; j++) {
+				domStyle.parts[j](item.parts[j]);
+			}
+
+			for(; j < item.parts.length; j++) {
+				domStyle.parts.push(addStyle(item.parts[j], options));
+			}
+		} else {
+			var parts = [];
+
+			for(var j = 0; j < item.parts.length; j++) {
+				parts.push(addStyle(item.parts[j], options));
+			}
+
+			stylesInDom[item.id] = {id: item.id, refs: 1, parts: parts};
+		}
+	}
+}
+
+function listToStyles (list, options) {
+	var styles = [];
+	var newStyles = {};
+
+	for (var i = 0; i < list.length; i++) {
+		var item = list[i];
+		var id = options.base ? item[0] + options.base : item[0];
+		var css = item[1];
+		var media = item[2];
+		var sourceMap = item[3];
+		var part = {css: css, media: media, sourceMap: sourceMap};
+
+		if(!newStyles[id]) styles.push(newStyles[id] = {id: id, parts: [part]});
+		else newStyles[id].parts.push(part);
+	}
+
+	return styles;
+}
+
+function insertStyleElement (options, style) {
+	var target = getElement(options.insertInto)
+
+	if (!target) {
+		throw new Error("Couldn't find a style target. This probably means that the value for the 'insertInto' parameter is invalid.");
+	}
+
+	var lastStyleElementInsertedAtTop = stylesInsertedAtTop[stylesInsertedAtTop.length - 1];
+
+	if (options.insertAt === "top") {
+		if (!lastStyleElementInsertedAtTop) {
+			target.insertBefore(style, target.firstChild);
+		} else if (lastStyleElementInsertedAtTop.nextSibling) {
+			target.insertBefore(style, lastStyleElementInsertedAtTop.nextSibling);
+		} else {
+			target.appendChild(style);
+		}
+		stylesInsertedAtTop.push(style);
+	} else if (options.insertAt === "bottom") {
+		target.appendChild(style);
+	} else {
+		throw new Error("Invalid value for parameter 'insertAt'. Must be 'top' or 'bottom'.");
+	}
+}
+
+function removeStyleElement (style) {
+	if (style.parentNode === null) return false;
+	style.parentNode.removeChild(style);
+
+	var idx = stylesInsertedAtTop.indexOf(style);
+	if(idx >= 0) {
+		stylesInsertedAtTop.splice(idx, 1);
+	}
+}
+
+function createStyleElement (options) {
+	var style = document.createElement("style");
+
+	options.attrs.type = "text/css";
+
+	addAttrs(style, options.attrs);
+	insertStyleElement(options, style);
+
+	return style;
+}
+
+function createLinkElement (options) {
+	var link = document.createElement("link");
+
+	options.attrs.type = "text/css";
+	options.attrs.rel = "stylesheet";
+
+	addAttrs(link, options.attrs);
+	insertStyleElement(options, link);
+
+	return link;
+}
+
+function addAttrs (el, attrs) {
+	Object.keys(attrs).forEach(function (key) {
+		el.setAttribute(key, attrs[key]);
+	});
+}
+
+function addStyle (obj, options) {
+	var style, update, remove, result;
+
+	// If a transform function was defined, run it on the css
+	if (options.transform && obj.css) {
+	    result = options.transform(obj.css);
+
+	    if (result) {
+	    	// If transform returns a value, use that instead of the original css.
+	    	// This allows running runtime transformations on the css.
+	    	obj.css = result;
+	    } else {
+	    	// If the transform function returns a falsy value, don't add this css.
+	    	// This allows conditional loading of css
+	    	return function() {
+	    		// noop
+	    	};
+	    }
+	}
+
+	if (options.singleton) {
+		var styleIndex = singletonCounter++;
+
+		style = singleton || (singleton = createStyleElement(options));
+
+		update = applyToSingletonTag.bind(null, style, styleIndex, false);
+		remove = applyToSingletonTag.bind(null, style, styleIndex, true);
+
+	} else if (
+		obj.sourceMap &&
+		typeof URL === "function" &&
+		typeof URL.createObjectURL === "function" &&
+		typeof URL.revokeObjectURL === "function" &&
+		typeof Blob === "function" &&
+		typeof btoa === "function"
+	) {
+		style = createLinkElement(options);
+		update = updateLink.bind(null, style, options);
+		remove = function () {
+			removeStyleElement(style);
+
+			if(style.href) URL.revokeObjectURL(style.href);
+		};
+	} else {
+		style = createStyleElement(options);
+		update = applyToTag.bind(null, style);
+		remove = function () {
+			removeStyleElement(style);
+		};
+	}
+
+	update(obj);
+
+	return function updateStyle (newObj) {
+		if (newObj) {
+			if (
+				newObj.css === obj.css &&
+				newObj.media === obj.media &&
+				newObj.sourceMap === obj.sourceMap
+			) {
+				return;
+			}
+
+			update(obj = newObj);
+		} else {
+			remove();
+		}
+	};
+}
+
+var replaceText = (function () {
+	var textStore = [];
+
+	return function (index, replacement) {
+		textStore[index] = replacement;
+
+		return textStore.filter(Boolean).join('\n');
+	};
+})();
+
+function applyToSingletonTag (style, index, remove, obj) {
+	var css = remove ? "" : obj.css;
+
+	if (style.styleSheet) {
+		style.styleSheet.cssText = replaceText(index, css);
+	} else {
+		var cssNode = document.createTextNode(css);
+		var childNodes = style.childNodes;
+
+		if (childNodes[index]) style.removeChild(childNodes[index]);
+
+		if (childNodes.length) {
+			style.insertBefore(cssNode, childNodes[index]);
+		} else {
+			style.appendChild(cssNode);
+		}
+	}
+}
+
+function applyToTag (style, obj) {
+	var css = obj.css;
+	var media = obj.media;
+
+	if(media) {
+		style.setAttribute("media", media)
+	}
+
+	if(style.styleSheet) {
+		style.styleSheet.cssText = css;
+	} else {
+		while(style.firstChild) {
+			style.removeChild(style.firstChild);
+		}
+
+		style.appendChild(document.createTextNode(css));
+	}
+}
+
+function updateLink (link, options, obj) {
+	var css = obj.css;
+	var sourceMap = obj.sourceMap;
+
+	/*
+		If convertToAbsoluteUrls isn't defined, but sourcemaps are enabled
+		and there is no publicPath defined then lets turn convertToAbsoluteUrls
+		on by default.  Otherwise default to the convertToAbsoluteUrls option
+		directly
+	*/
+	var autoFixUrls = options.convertToAbsoluteUrls === undefined && sourceMap;
+
+	if (options.convertToAbsoluteUrls || autoFixUrls) {
+		css = fixUrls(css);
+	}
+
+	if (sourceMap) {
+		// http://stackoverflow.com/a/26603875
+		css += "\n/*# sourceMappingURL=data:application/json;base64," + btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap)))) + " */";
+	}
+
+	var blob = new Blob([css], { type: "text/css" });
+
+	var oldSrc = link.href;
+
+	link.href = URL.createObjectURL(blob);
+
+	if(oldSrc) URL.revokeObjectURL(oldSrc);
+}
+
+
+/***/ }),
+/* 4 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+var bind = __webpack_require__(13);
+var isBuffer = __webpack_require__(89);
 
 /*global toString:true*/
 
@@ -374,7 +1166,7 @@ module.exports = {
 
 
 /***/ }),
-/* 1 */
+/* 5 */
 /***/ (function(module, exports) {
 
 /* globals __VUE_SSR_CONTEXT__ */
@@ -483,41 +1275,14 @@ module.exports = function normalizeComponent (
 
 
 /***/ }),
-/* 2 */
-/***/ (function(module, exports) {
-
-var g;
-
-// This works in non-strict mode
-g = (function() {
-	return this;
-})();
-
-try {
-	// This works if eval is allowed (see CSP)
-	g = g || Function("return this")() || (1,eval)("this");
-} catch(e) {
-	// This works if the window reference is available
-	if(typeof window === "object")
-		g = window;
-}
-
-// g can still be undefined, but nothing to do about it...
-// We return undefined, instead of nothing here, so it's
-// easier to handle this case. if(!global) { ...}
-
-module.exports = g;
-
-
-/***/ }),
-/* 3 */
+/* 6 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 /* WEBPACK VAR INJECTION */(function(process) {
 
-var utils = __webpack_require__(0);
-var normalizeHeaderName = __webpack_require__(27);
+var utils = __webpack_require__(4);
+var normalizeHeaderName = __webpack_require__(91);
 
 var DEFAULT_CONTENT_TYPE = {
   'Content-Type': 'application/x-www-form-urlencoded'
@@ -533,10 +1298,10 @@ function getDefaultAdapter() {
   var adapter;
   if (typeof XMLHttpRequest !== 'undefined') {
     // For browsers use XHR adapter
-    adapter = __webpack_require__(8);
+    adapter = __webpack_require__(15);
   } else if (typeof process !== 'undefined') {
     // For node use HTTP adapter
-    adapter = __webpack_require__(8);
+    adapter = __webpack_require__(15);
   }
   return adapter;
 }
@@ -611,10 +1376,607 @@ utils.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method) {
 
 module.exports = defaults;
 
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(7)))
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14)))
 
 /***/ }),
-/* 4 */
+/* 7 */
+/***/ (function(module, exports) {
+
+module.exports=/[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061E\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166D\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B5A-\u1B60\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4E\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDF55-\uDF59]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9]|\uD805[\uDC4B-\uDC4F\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDF3C-\uDF3E]|\uD806[\uDC3B\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8]|\uD809[\uDC70-\uDC74]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDE97-\uDE9A]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD83A[\uDD5E\uDD5F]/
+
+/***/ }),
+/* 8 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+/**
+ * class Ruler
+ *
+ * Helper class, used by [[MarkdownIt#core]], [[MarkdownIt#block]] and
+ * [[MarkdownIt#inline]] to manage sequences of functions (rules):
+ *
+ * - keep rules in defined order
+ * - assign the name to each rule
+ * - enable/disable rules
+ * - add/replace rules
+ * - allow assign rules to additional named chains (in the same)
+ * - cacheing lists of active rules
+ *
+ * You will not need use this class directly until write plugins. For simple
+ * rules control use [[MarkdownIt.disable]], [[MarkdownIt.enable]] and
+ * [[MarkdownIt.use]].
+ **/
+
+
+
+/**
+ * new Ruler()
+ **/
+function Ruler() {
+  // List of added rules. Each element is:
+  //
+  // {
+  //   name: XXX,
+  //   enabled: Boolean,
+  //   fn: Function(),
+  //   alt: [ name2, name3 ]
+  // }
+  //
+  this.__rules__ = [];
+
+  // Cached rule chains.
+  //
+  // First level - chain name, '' for default.
+  // Second level - diginal anchor for fast filtering by charcodes.
+  //
+  this.__cache__ = null;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Helper methods, should not be used directly
+
+
+// Find rule index by name
+//
+Ruler.prototype.__find__ = function (name) {
+  for (var i = 0; i < this.__rules__.length; i++) {
+    if (this.__rules__[i].name === name) {
+      return i;
+    }
+  }
+  return -1;
+};
+
+
+// Build rules lookup cache
+//
+Ruler.prototype.__compile__ = function () {
+  var self = this;
+  var chains = [ '' ];
+
+  // collect unique names
+  self.__rules__.forEach(function (rule) {
+    if (!rule.enabled) { return; }
+
+    rule.alt.forEach(function (altName) {
+      if (chains.indexOf(altName) < 0) {
+        chains.push(altName);
+      }
+    });
+  });
+
+  self.__cache__ = {};
+
+  chains.forEach(function (chain) {
+    self.__cache__[chain] = [];
+    self.__rules__.forEach(function (rule) {
+      if (!rule.enabled) { return; }
+
+      if (chain && rule.alt.indexOf(chain) < 0) { return; }
+
+      self.__cache__[chain].push(rule.fn);
+    });
+  });
+};
+
+
+/**
+ * Ruler.at(name, fn [, options])
+ * - name (String): rule name to replace.
+ * - fn (Function): new rule function.
+ * - options (Object): new rule options (not mandatory).
+ *
+ * Replace rule by name with new function & options. Throws error if name not
+ * found.
+ *
+ * ##### Options:
+ *
+ * - __alt__ - array with names of "alternate" chains.
+ *
+ * ##### Example
+ *
+ * Replace existing typographer replacement rule with new one:
+ *
+ * ```javascript
+ * var md = require('markdown-it')();
+ *
+ * md.core.ruler.at('replacements', function replace(state) {
+ *   //...
+ * });
+ * ```
+ **/
+Ruler.prototype.at = function (name, fn, options) {
+  var index = this.__find__(name);
+  var opt = options || {};
+
+  if (index === -1) { throw new Error('Parser rule not found: ' + name); }
+
+  this.__rules__[index].fn = fn;
+  this.__rules__[index].alt = opt.alt || [];
+  this.__cache__ = null;
+};
+
+
+/**
+ * Ruler.before(beforeName, ruleName, fn [, options])
+ * - beforeName (String): new rule will be added before this one.
+ * - ruleName (String): name of added rule.
+ * - fn (Function): rule function.
+ * - options (Object): rule options (not mandatory).
+ *
+ * Add new rule to chain before one with given name. See also
+ * [[Ruler.after]], [[Ruler.push]].
+ *
+ * ##### Options:
+ *
+ * - __alt__ - array with names of "alternate" chains.
+ *
+ * ##### Example
+ *
+ * ```javascript
+ * var md = require('markdown-it')();
+ *
+ * md.block.ruler.before('paragraph', 'my_rule', function replace(state) {
+ *   //...
+ * });
+ * ```
+ **/
+Ruler.prototype.before = function (beforeName, ruleName, fn, options) {
+  var index = this.__find__(beforeName);
+  var opt = options || {};
+
+  if (index === -1) { throw new Error('Parser rule not found: ' + beforeName); }
+
+  this.__rules__.splice(index, 0, {
+    name: ruleName,
+    enabled: true,
+    fn: fn,
+    alt: opt.alt || []
+  });
+
+  this.__cache__ = null;
+};
+
+
+/**
+ * Ruler.after(afterName, ruleName, fn [, options])
+ * - afterName (String): new rule will be added after this one.
+ * - ruleName (String): name of added rule.
+ * - fn (Function): rule function.
+ * - options (Object): rule options (not mandatory).
+ *
+ * Add new rule to chain after one with given name. See also
+ * [[Ruler.before]], [[Ruler.push]].
+ *
+ * ##### Options:
+ *
+ * - __alt__ - array with names of "alternate" chains.
+ *
+ * ##### Example
+ *
+ * ```javascript
+ * var md = require('markdown-it')();
+ *
+ * md.inline.ruler.after('text', 'my_rule', function replace(state) {
+ *   //...
+ * });
+ * ```
+ **/
+Ruler.prototype.after = function (afterName, ruleName, fn, options) {
+  var index = this.__find__(afterName);
+  var opt = options || {};
+
+  if (index === -1) { throw new Error('Parser rule not found: ' + afterName); }
+
+  this.__rules__.splice(index + 1, 0, {
+    name: ruleName,
+    enabled: true,
+    fn: fn,
+    alt: opt.alt || []
+  });
+
+  this.__cache__ = null;
+};
+
+/**
+ * Ruler.push(ruleName, fn [, options])
+ * - ruleName (String): name of added rule.
+ * - fn (Function): rule function.
+ * - options (Object): rule options (not mandatory).
+ *
+ * Push new rule to the end of chain. See also
+ * [[Ruler.before]], [[Ruler.after]].
+ *
+ * ##### Options:
+ *
+ * - __alt__ - array with names of "alternate" chains.
+ *
+ * ##### Example
+ *
+ * ```javascript
+ * var md = require('markdown-it')();
+ *
+ * md.core.ruler.push('my_rule', function replace(state) {
+ *   //...
+ * });
+ * ```
+ **/
+Ruler.prototype.push = function (ruleName, fn, options) {
+  var opt = options || {};
+
+  this.__rules__.push({
+    name: ruleName,
+    enabled: true,
+    fn: fn,
+    alt: opt.alt || []
+  });
+
+  this.__cache__ = null;
+};
+
+
+/**
+ * Ruler.enable(list [, ignoreInvalid]) -> Array
+ * - list (String|Array): list of rule names to enable.
+ * - ignoreInvalid (Boolean): set `true` to ignore errors when rule not found.
+ *
+ * Enable rules with given names. If any rule name not found - throw Error.
+ * Errors can be disabled by second param.
+ *
+ * Returns list of found rule names (if no exception happened).
+ *
+ * See also [[Ruler.disable]], [[Ruler.enableOnly]].
+ **/
+Ruler.prototype.enable = function (list, ignoreInvalid) {
+  if (!Array.isArray(list)) { list = [ list ]; }
+
+  var result = [];
+
+  // Search by name and enable
+  list.forEach(function (name) {
+    var idx = this.__find__(name);
+
+    if (idx < 0) {
+      if (ignoreInvalid) { return; }
+      throw new Error('Rules manager: invalid rule name ' + name);
+    }
+    this.__rules__[idx].enabled = true;
+    result.push(name);
+  }, this);
+
+  this.__cache__ = null;
+  return result;
+};
+
+
+/**
+ * Ruler.enableOnly(list [, ignoreInvalid])
+ * - list (String|Array): list of rule names to enable (whitelist).
+ * - ignoreInvalid (Boolean): set `true` to ignore errors when rule not found.
+ *
+ * Enable rules with given names, and disable everything else. If any rule name
+ * not found - throw Error. Errors can be disabled by second param.
+ *
+ * See also [[Ruler.disable]], [[Ruler.enable]].
+ **/
+Ruler.prototype.enableOnly = function (list, ignoreInvalid) {
+  if (!Array.isArray(list)) { list = [ list ]; }
+
+  this.__rules__.forEach(function (rule) { rule.enabled = false; });
+
+  this.enable(list, ignoreInvalid);
+};
+
+
+/**
+ * Ruler.disable(list [, ignoreInvalid]) -> Array
+ * - list (String|Array): list of rule names to disable.
+ * - ignoreInvalid (Boolean): set `true` to ignore errors when rule not found.
+ *
+ * Disable rules with given names. If any rule name not found - throw Error.
+ * Errors can be disabled by second param.
+ *
+ * Returns list of found rule names (if no exception happened).
+ *
+ * See also [[Ruler.enable]], [[Ruler.enableOnly]].
+ **/
+Ruler.prototype.disable = function (list, ignoreInvalid) {
+  if (!Array.isArray(list)) { list = [ list ]; }
+
+  var result = [];
+
+  // Search by name and disable
+  list.forEach(function (name) {
+    var idx = this.__find__(name);
+
+    if (idx < 0) {
+      if (ignoreInvalid) { return; }
+      throw new Error('Rules manager: invalid rule name ' + name);
+    }
+    this.__rules__[idx].enabled = false;
+    result.push(name);
+  }, this);
+
+  this.__cache__ = null;
+  return result;
+};
+
+
+/**
+ * Ruler.getRules(chainName) -> Array
+ *
+ * Return array of active functions (rules) for given chain name. It analyzes
+ * rules configuration, compiles caches if not exists and returns result.
+ *
+ * Default chain name is `''` (empty string). It can't be skipped. That's
+ * done intentionally, to keep signature monomorphic for high speed.
+ **/
+Ruler.prototype.getRules = function (chainName) {
+  if (this.__cache__ === null) {
+    this.__compile__();
+  }
+
+  // Chain can be empty, if rules disabled. But we still have to return Array.
+  return this.__cache__[chainName] || [];
+};
+
+module.exports = Ruler;
+
+
+/***/ }),
+/* 9 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+// Token class
+
+
+
+
+/**
+ * class Token
+ **/
+
+/**
+ * new Token(type, tag, nesting)
+ *
+ * Create new token and fill passed properties.
+ **/
+function Token(type, tag, nesting) {
+  /**
+   * Token#type -> String
+   *
+   * Type of the token (string, e.g. "paragraph_open")
+   **/
+  this.type     = type;
+
+  /**
+   * Token#tag -> String
+   *
+   * html tag name, e.g. "p"
+   **/
+  this.tag      = tag;
+
+  /**
+   * Token#attrs -> Array
+   *
+   * Html attributes. Format: `[ [ name1, value1 ], [ name2, value2 ] ]`
+   **/
+  this.attrs    = null;
+
+  /**
+   * Token#map -> Array
+   *
+   * Source map info. Format: `[ line_begin, line_end ]`
+   **/
+  this.map      = null;
+
+  /**
+   * Token#nesting -> Number
+   *
+   * Level change (number in {-1, 0, 1} set), where:
+   *
+   * -  `1` means the tag is opening
+   * -  `0` means the tag is self-closing
+   * - `-1` means the tag is closing
+   **/
+  this.nesting  = nesting;
+
+  /**
+   * Token#level -> Number
+   *
+   * nesting level, the same as `state.level`
+   **/
+  this.level    = 0;
+
+  /**
+   * Token#children -> Array
+   *
+   * An array of child nodes (inline and img tokens)
+   **/
+  this.children = null;
+
+  /**
+   * Token#content -> String
+   *
+   * In a case of self-closing tag (code, html, fence, etc.),
+   * it has contents of this tag.
+   **/
+  this.content  = '';
+
+  /**
+   * Token#markup -> String
+   *
+   * '*' or '_' for emphasis, fence string for fence, etc.
+   **/
+  this.markup   = '';
+
+  /**
+   * Token#info -> String
+   *
+   * fence infostring
+   **/
+  this.info     = '';
+
+  /**
+   * Token#meta -> Object
+   *
+   * A place for plugins to store an arbitrary data
+   **/
+  this.meta     = null;
+
+  /**
+   * Token#block -> Boolean
+   *
+   * True for block-level tokens, false for inline tokens.
+   * Used in renderer to calculate line breaks
+   **/
+  this.block    = false;
+
+  /**
+   * Token#hidden -> Boolean
+   *
+   * If it's true, ignore this element when rendering. Used for tight lists
+   * to hide paragraphs.
+   **/
+  this.hidden   = false;
+}
+
+
+/**
+ * Token.attrIndex(name) -> Number
+ *
+ * Search attribute index by name.
+ **/
+Token.prototype.attrIndex = function attrIndex(name) {
+  var attrs, i, len;
+
+  if (!this.attrs) { return -1; }
+
+  attrs = this.attrs;
+
+  for (i = 0, len = attrs.length; i < len; i++) {
+    if (attrs[i][0] === name) { return i; }
+  }
+  return -1;
+};
+
+
+/**
+ * Token.attrPush(attrData)
+ *
+ * Add `[ name, value ]` attribute to list. Init attrs if necessary
+ **/
+Token.prototype.attrPush = function attrPush(attrData) {
+  if (this.attrs) {
+    this.attrs.push(attrData);
+  } else {
+    this.attrs = [ attrData ];
+  }
+};
+
+
+/**
+ * Token.attrSet(name, value)
+ *
+ * Set `name` attribute to `value`. Override old value if exists.
+ **/
+Token.prototype.attrSet = function attrSet(name, value) {
+  var idx = this.attrIndex(name),
+      attrData = [ name, value ];
+
+  if (idx < 0) {
+    this.attrPush(attrData);
+  } else {
+    this.attrs[idx] = attrData;
+  }
+};
+
+
+/**
+ * Token.attrGet(name)
+ *
+ * Get the value of attribute `name`, or null if it does not exist.
+ **/
+Token.prototype.attrGet = function attrGet(name) {
+  var idx = this.attrIndex(name), value = null;
+  if (idx >= 0) {
+    value = this.attrs[idx][1];
+  }
+  return value;
+};
+
+
+/**
+ * Token.attrJoin(name, value)
+ *
+ * Join value to existing attribute via space. Or create new attribute if not
+ * exists. Useful to operate with token classes.
+ **/
+Token.prototype.attrJoin = function attrJoin(name, value) {
+  var idx = this.attrIndex(name);
+
+  if (idx < 0) {
+    this.attrPush([ name, value ]);
+  } else {
+    this.attrs[idx][1] = this.attrs[idx][1] + ' ' + value;
+  }
+};
+
+
+module.exports = Token;
+
+
+/***/ }),
+/* 10 */
+/***/ (function(module, exports) {
+
+module.exports = function(module) {
+	if(!module.webpackPolyfill) {
+		module.deprecate = function() {};
+		module.paths = [];
+		// module.parent = undefined by default
+		if(!module.children) module.children = [];
+		Object.defineProperty(module, "loaded", {
+			enumerable: true,
+			get: function() {
+				return module.l;
+			}
+		});
+		Object.defineProperty(module, "id", {
+			enumerable: true,
+			get: function() {
+				return module.i;
+			}
+		});
+		module.webpackPolyfill = 1;
+	}
+	return module;
+};
+
+
+/***/ }),
+/* 11 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
@@ -3236,10 +4598,10 @@ Popper.Defaults = Defaults;
 /* harmony default export */ __webpack_exports__["default"] = (Popper);
 //# sourceMappingURL=popper.js.map
 
-/* WEBPACK VAR INJECTION */}.call(__webpack_exports__, __webpack_require__(2)))
+/* WEBPACK VAR INJECTION */}.call(__webpack_exports__, __webpack_require__(1)))
 
 /***/ }),
-/* 5 */
+/* 12 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;/*!
@@ -14118,7 +15480,7 @@ return jQuery;
 
 
 /***/ }),
-/* 6 */
+/* 13 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -14136,7 +15498,7 @@ module.exports = function bind(fn, thisArg) {
 
 
 /***/ }),
-/* 7 */
+/* 14 */
 /***/ (function(module, exports) {
 
 // shim for using process in browser
@@ -14326,18 +15688,18 @@ process.umask = function() { return 0; };
 
 
 /***/ }),
-/* 8 */
+/* 15 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
-var settle = __webpack_require__(28);
-var buildURL = __webpack_require__(30);
-var parseHeaders = __webpack_require__(31);
-var isURLSameOrigin = __webpack_require__(32);
-var createError = __webpack_require__(9);
+var utils = __webpack_require__(4);
+var settle = __webpack_require__(92);
+var buildURL = __webpack_require__(94);
+var parseHeaders = __webpack_require__(95);
+var isURLSameOrigin = __webpack_require__(96);
+var createError = __webpack_require__(16);
 
 module.exports = function xhrAdapter(config) {
   return new Promise(function dispatchXhrRequest(resolve, reject) {
@@ -14417,7 +15779,7 @@ module.exports = function xhrAdapter(config) {
     // This is only done if running in a standard browser environment.
     // Specifically not if we're in a web worker, or react-native.
     if (utils.isStandardBrowserEnv()) {
-      var cookies = __webpack_require__(33);
+      var cookies = __webpack_require__(97);
 
       // Add xsrf header
       var xsrfValue = (config.withCredentials || isURLSameOrigin(config.url)) && config.xsrfCookieName ?
@@ -14495,13 +15857,13 @@ module.exports = function xhrAdapter(config) {
 
 
 /***/ }),
-/* 9 */
+/* 16 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var enhanceError = __webpack_require__(29);
+var enhanceError = __webpack_require__(93);
 
 /**
  * Create an Error with the specified message, config, error code, request and response.
@@ -14520,7 +15882,7 @@ module.exports = function createError(message, config, code, request, response) 
 
 
 /***/ }),
-/* 10 */
+/* 17 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -14532,7 +15894,7 @@ module.exports = function isCancel(value) {
 
 
 /***/ }),
-/* 11 */
+/* 18 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -14558,108 +15920,26 @@ module.exports = Cancel;
 
 
 /***/ }),
-/* 12 */
+/* 19 */
 /***/ (function(module, exports, __webpack_require__) {
 
 if (false) {
   module.exports = require('./vue.common.prod.js')
 } else {
-  module.exports = __webpack_require__(47)
+  module.exports = __webpack_require__(111)
 }
 
 
 /***/ }),
-/* 13 */
-/***/ (function(module, exports) {
-
-/*
-	MIT License http://www.opensource.org/licenses/mit-license.php
-	Author Tobias Koppers @sokra
-*/
-// css base code, injected by the css-loader
-module.exports = function(useSourceMap) {
-	var list = [];
-
-	// return the list of modules as css string
-	list.toString = function toString() {
-		return this.map(function (item) {
-			var content = cssWithMappingToString(item, useSourceMap);
-			if(item[2]) {
-				return "@media " + item[2] + "{" + content + "}";
-			} else {
-				return content;
-			}
-		}).join("");
-	};
-
-	// import a list of modules into the list
-	list.i = function(modules, mediaQuery) {
-		if(typeof modules === "string")
-			modules = [[null, modules, ""]];
-		var alreadyImportedModules = {};
-		for(var i = 0; i < this.length; i++) {
-			var id = this[i][0];
-			if(typeof id === "number")
-				alreadyImportedModules[id] = true;
-		}
-		for(i = 0; i < modules.length; i++) {
-			var item = modules[i];
-			// skip already imported module
-			// this implementation is not 100% perfect for weird media query combinations
-			//  when a module is imported multiple times with different media queries.
-			//  I hope this will never occur (Hey this way we have smaller bundles)
-			if(typeof item[0] !== "number" || !alreadyImportedModules[item[0]]) {
-				if(mediaQuery && !item[2]) {
-					item[2] = mediaQuery;
-				} else if(mediaQuery) {
-					item[2] = "(" + item[2] + ") and (" + mediaQuery + ")";
-				}
-				list.push(item);
-			}
-		}
-	};
-	return list;
-};
-
-function cssWithMappingToString(item, useSourceMap) {
-	var content = item[1] || '';
-	var cssMapping = item[3];
-	if (!cssMapping) {
-		return content;
-	}
-
-	if (useSourceMap && typeof btoa === 'function') {
-		var sourceMapping = toComment(cssMapping);
-		var sourceURLs = cssMapping.sources.map(function (source) {
-			return '/*# sourceURL=' + cssMapping.sourceRoot + source + ' */'
-		});
-
-		return [content].concat(sourceURLs).concat([sourceMapping]).join('\n');
-	}
-
-	return [content].join('\n');
-}
-
-// Adapted from convert-source-map (MIT)
-function toComment(sourceMap) {
-	// eslint-disable-next-line no-undef
-	var base64 = btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap))));
-	var data = 'sourceMappingURL=data:application/json;charset=utf-8;base64,' + base64;
-
-	return '/*# ' + data + ' */';
-}
-
-
-/***/ }),
-/* 14 */
+/* 20 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var disposed = false
-var normalizeComponent = __webpack_require__(1)
+var normalizeComponent = __webpack_require__(5)
 /* script */
-var __vue_script__ = __webpack_require__(61)
+var __vue_script__ = __webpack_require__(124)
 /* template */
-var __vue_template__ = __webpack_require__(69)
+var __vue_template__ = __webpack_require__(132)
 /* template functional */
 var __vue_template_functional__ = false
 /* styles */
@@ -14698,15 +15978,15 @@ module.exports = Component.exports
 
 
 /***/ }),
-/* 15 */
+/* 21 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var disposed = false
-var normalizeComponent = __webpack_require__(1)
+var normalizeComponent = __webpack_require__(5)
 /* script */
-var __vue_script__ = __webpack_require__(70)
+var __vue_script__ = __webpack_require__(133)
 /* template */
-var __vue_template__ = __webpack_require__(71)
+var __vue_template__ = __webpack_require__(134)
 /* template functional */
 var __vue_template_functional__ = false
 /* styles */
@@ -14745,7 +16025,5405 @@ module.exports = Component.exports
 
 
 /***/ }),
-/* 16 */
+/* 22 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+// HTML5 entities map: { name -> utf16string }
+//
+
+
+/*eslint quotes:0*/
+module.exports = __webpack_require__(139);
+
+
+/***/ }),
+/* 23 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+
+module.exports.encode = __webpack_require__(140);
+module.exports.decode = __webpack_require__(141);
+module.exports.format = __webpack_require__(142);
+module.exports.parse  = __webpack_require__(143);
+
+
+/***/ }),
+/* 24 */
+/***/ (function(module, exports) {
+
+module.exports=/[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/
+
+/***/ }),
+/* 25 */
+/***/ (function(module, exports) {
+
+module.exports=/[\0-\x1F\x7F-\x9F]/
+
+/***/ }),
+/* 26 */
+/***/ (function(module, exports) {
+
+module.exports=/[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/
+
+/***/ }),
+/* 27 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+// Regexps to match html elements
+
+
+
+var attr_name     = '[a-zA-Z_:][a-zA-Z0-9:._-]*';
+
+var unquoted      = '[^"\'=<>`\\x00-\\x20]+';
+var single_quoted = "'[^']*'";
+var double_quoted = '"[^"]*"';
+
+var attr_value  = '(?:' + unquoted + '|' + single_quoted + '|' + double_quoted + ')';
+
+var attribute   = '(?:\\s+' + attr_name + '(?:\\s*=\\s*' + attr_value + ')?)';
+
+var open_tag    = '<[A-Za-z][A-Za-z0-9\\-]*' + attribute + '*\\s*\\/?>';
+
+var close_tag   = '<\\/[A-Za-z][A-Za-z0-9\\-]*\\s*>';
+var comment     = '<!---->|<!--(?:-?[^>-])(?:-?[^-])*-->';
+var processing  = '<[?].*?[?]>';
+var declaration = '<![A-Z]+\\s+[^>]*>';
+var cdata       = '<!\\[CDATA\\[[\\s\\S]*?\\]\\]>';
+
+var HTML_TAG_RE = new RegExp('^(?:' + open_tag + '|' + close_tag + '|' + comment +
+                        '|' + processing + '|' + declaration + '|' + cdata + ')');
+var HTML_OPEN_CLOSE_TAG_RE = new RegExp('^(?:' + open_tag + '|' + close_tag + ')');
+
+module.exports.HTML_TAG_RE = HTML_TAG_RE;
+module.exports.HTML_OPEN_CLOSE_TAG_RE = HTML_OPEN_CLOSE_TAG_RE;
+
+
+/***/ }),
+/* 28 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+// ~~strike through~~
+//
+
+
+
+// Insert each marker as a separate text token, and add it to delimiter list
+//
+module.exports.tokenize = function strikethrough(state, silent) {
+  var i, scanned, token, len, ch,
+      start = state.pos,
+      marker = state.src.charCodeAt(start);
+
+  if (silent) { return false; }
+
+  if (marker !== 0x7E/* ~ */) { return false; }
+
+  scanned = state.scanDelims(state.pos, true);
+  len = scanned.length;
+  ch = String.fromCharCode(marker);
+
+  if (len < 2) { return false; }
+
+  if (len % 2) {
+    token         = state.push('text', '', 0);
+    token.content = ch;
+    len--;
+  }
+
+  for (i = 0; i < len; i += 2) {
+    token         = state.push('text', '', 0);
+    token.content = ch + ch;
+
+    state.delimiters.push({
+      marker: marker,
+      length: 0, // disable "rule of 3" length checks meant for emphasis
+      jump:   i,
+      token:  state.tokens.length - 1,
+      end:    -1,
+      open:   scanned.can_open,
+      close:  scanned.can_close
+    });
+  }
+
+  state.pos += scanned.length;
+
+  return true;
+};
+
+
+function postProcess(state, delimiters) {
+  var i, j,
+      startDelim,
+      endDelim,
+      token,
+      loneMarkers = [],
+      max = delimiters.length;
+
+  for (i = 0; i < max; i++) {
+    startDelim = delimiters[i];
+
+    if (startDelim.marker !== 0x7E/* ~ */) {
+      continue;
+    }
+
+    if (startDelim.end === -1) {
+      continue;
+    }
+
+    endDelim = delimiters[startDelim.end];
+
+    token         = state.tokens[startDelim.token];
+    token.type    = 's_open';
+    token.tag     = 's';
+    token.nesting = 1;
+    token.markup  = '~~';
+    token.content = '';
+
+    token         = state.tokens[endDelim.token];
+    token.type    = 's_close';
+    token.tag     = 's';
+    token.nesting = -1;
+    token.markup  = '~~';
+    token.content = '';
+
+    if (state.tokens[endDelim.token - 1].type === 'text' &&
+        state.tokens[endDelim.token - 1].content === '~') {
+
+      loneMarkers.push(endDelim.token - 1);
+    }
+  }
+
+  // If a marker sequence has an odd number of characters, it's splitted
+  // like this: `~~~~~` -> `~` + `~~` + `~~`, leaving one marker at the
+  // start of the sequence.
+  //
+  // So, we have to move all those markers after subsequent s_close tags.
+  //
+  while (loneMarkers.length) {
+    i = loneMarkers.pop();
+    j = i + 1;
+
+    while (j < state.tokens.length && state.tokens[j].type === 's_close') {
+      j++;
+    }
+
+    j--;
+
+    if (i !== j) {
+      token = state.tokens[j];
+      state.tokens[j] = state.tokens[i];
+      state.tokens[i] = token;
+    }
+  }
+}
+
+
+// Walk through delimiter list and replace text tokens with tags
+//
+module.exports.postProcess = function strikethrough(state) {
+  var curr,
+      tokens_meta = state.tokens_meta,
+      max = state.tokens_meta.length;
+
+  postProcess(state, state.delimiters);
+
+  for (curr = 0; curr < max; curr++) {
+    if (tokens_meta[curr] && tokens_meta[curr].delimiters) {
+      postProcess(state, tokens_meta[curr].delimiters);
+    }
+  }
+};
+
+
+/***/ }),
+/* 29 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+// Process *this* and _that_
+//
+
+
+
+// Insert each marker as a separate text token, and add it to delimiter list
+//
+module.exports.tokenize = function emphasis(state, silent) {
+  var i, scanned, token,
+      start = state.pos,
+      marker = state.src.charCodeAt(start);
+
+  if (silent) { return false; }
+
+  if (marker !== 0x5F /* _ */ && marker !== 0x2A /* * */) { return false; }
+
+  scanned = state.scanDelims(state.pos, marker === 0x2A);
+
+  for (i = 0; i < scanned.length; i++) {
+    token         = state.push('text', '', 0);
+    token.content = String.fromCharCode(marker);
+
+    state.delimiters.push({
+      // Char code of the starting marker (number).
+      //
+      marker: marker,
+
+      // Total length of these series of delimiters.
+      //
+      length: scanned.length,
+
+      // An amount of characters before this one that's equivalent to
+      // current one. In plain English: if this delimiter does not open
+      // an emphasis, neither do previous `jump` characters.
+      //
+      // Used to skip sequences like "*****" in one step, for 1st asterisk
+      // value will be 0, for 2nd it's 1 and so on.
+      //
+      jump:   i,
+
+      // A position of the token this delimiter corresponds to.
+      //
+      token:  state.tokens.length - 1,
+
+      // If this delimiter is matched as a valid opener, `end` will be
+      // equal to its position, otherwise it's `-1`.
+      //
+      end:    -1,
+
+      // Boolean flags that determine if this delimiter could open or close
+      // an emphasis.
+      //
+      open:   scanned.can_open,
+      close:  scanned.can_close
+    });
+  }
+
+  state.pos += scanned.length;
+
+  return true;
+};
+
+
+function postProcess(state, delimiters) {
+  var i,
+      startDelim,
+      endDelim,
+      token,
+      ch,
+      isStrong,
+      max = delimiters.length;
+
+  for (i = max - 1; i >= 0; i--) {
+    startDelim = delimiters[i];
+
+    if (startDelim.marker !== 0x5F/* _ */ && startDelim.marker !== 0x2A/* * */) {
+      continue;
+    }
+
+    // Process only opening markers
+    if (startDelim.end === -1) {
+      continue;
+    }
+
+    endDelim = delimiters[startDelim.end];
+
+    // If the previous delimiter has the same marker and is adjacent to this one,
+    // merge those into one strong delimiter.
+    //
+    // `<em><em>whatever</em></em>` -> `<strong>whatever</strong>`
+    //
+    isStrong = i > 0 &&
+               delimiters[i - 1].end === startDelim.end + 1 &&
+               delimiters[i - 1].token === startDelim.token - 1 &&
+               delimiters[startDelim.end + 1].token === endDelim.token + 1 &&
+               delimiters[i - 1].marker === startDelim.marker;
+
+    ch = String.fromCharCode(startDelim.marker);
+
+    token         = state.tokens[startDelim.token];
+    token.type    = isStrong ? 'strong_open' : 'em_open';
+    token.tag     = isStrong ? 'strong' : 'em';
+    token.nesting = 1;
+    token.markup  = isStrong ? ch + ch : ch;
+    token.content = '';
+
+    token         = state.tokens[endDelim.token];
+    token.type    = isStrong ? 'strong_close' : 'em_close';
+    token.tag     = isStrong ? 'strong' : 'em';
+    token.nesting = -1;
+    token.markup  = isStrong ? ch + ch : ch;
+    token.content = '';
+
+    if (isStrong) {
+      state.tokens[delimiters[i - 1].token].content = '';
+      state.tokens[delimiters[startDelim.end + 1].token].content = '';
+      i--;
+    }
+  }
+}
+
+
+// Walk through delimiter list and replace text tokens with tags
+//
+module.exports.postProcess = function emphasis(state) {
+  var curr,
+      tokens_meta = state.tokens_meta,
+      max = state.tokens_meta.length;
+
+  postProcess(state, state.delimiters);
+
+  for (curr = 0; curr < max; curr++) {
+    if (tokens_meta[curr] && tokens_meta[curr].delimiters) {
+      postProcess(state, tokens_meta[curr].delimiters);
+    }
+  }
+};
+
+
+/***/ }),
+/* 30 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {(function(){
+
+if (
+	typeof self !== 'undefined' && !self.Prism ||
+	typeof global !== 'undefined' && !global.Prism
+) {
+	return;
+}
+
+var url = /\b([a-z]{3,7}:\/\/|tel:)[\w\-+%~/.:=&@]+(?:\?[\w\-+%~/.:=?&!$'()*,;@]*)?(?:#[\w\-+%~/.:#=?&!$'()*,;@]*)?/,
+    email = /\b\S+@[\w.]+[a-z]{2}/,
+    linkMd = /\[([^\]]+)]\(([^)]+)\)/,
+
+	// Tokens that may contain URLs and emails
+    candidates = ['comment', 'url', 'attr-value', 'string'];
+
+Prism.plugins.autolinker = {
+	processGrammar: function (grammar) {
+		// Abort if grammar has already been processed
+		if (!grammar || grammar['url-link']) {
+			return;
+		}
+		Prism.languages.DFS(grammar, function (key, def, type) {
+			if (candidates.indexOf(type) > -1 && !Array.isArray(def)) {
+				if (!def.pattern) {
+					def = this[key] = {
+						pattern: def
+					};
+				}
+
+				def.inside = def.inside || {};
+
+				if (type == 'comment') {
+					def.inside['md-link'] = linkMd;
+				}
+				if (type == 'attr-value') {
+					Prism.languages.insertBefore('inside', 'punctuation', { 'url-link': url }, def);
+				}
+				else {
+					def.inside['url-link'] = url;
+				}
+
+				def.inside['email-link'] = email;
+			}
+		});
+		grammar['url-link'] = url;
+		grammar['email-link'] = email;
+	}
+};
+
+Prism.hooks.add('before-highlight', function(env) {
+	Prism.plugins.autolinker.processGrammar(env.grammar);
+});
+
+Prism.hooks.add('wrap', function(env) {
+	if (/-link$/.test(env.type)) {
+		env.tag = 'a';
+
+		var href = env.content;
+
+		if (env.type == 'email-link' && href.indexOf('mailto:') != 0) {
+			href = 'mailto:' + href;
+		}
+		else if (env.type == 'md-link') {
+			// Markdown
+			var match = env.content.match(linkMd);
+
+			href = match[2];
+			env.content = match[1];
+		}
+
+		env.attributes.href = href;
+
+		// Silently catch any error thrown by decodeURIComponent (#1186)
+		try {
+			env.content = decodeURIComponent(env.content);
+		} catch(e) {}
+	}
+});
+
+})();
+
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 31 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {!function(){if(("undefined"==typeof self||self.Prism)&&("undefined"==typeof global||global.Prism)){var t=/\b([a-z]{3,7}:\/\/|tel:)[\w\-+%~/.:=&@]+(?:\?[\w\-+%~/.:=?&!$'()*,;@]*)?(?:#[\w\-+%~/.:#=?&!$'()*,;@]*)?/,r=/\b\S+@[\w.]+[a-z]{2}/,a=/\[([^\]]+)]\(([^)]+)\)/,l=["comment","url","attr-value","string"];Prism.plugins.autolinker={processGrammar:function(i){i&&!i["url-link"]&&(Prism.languages.DFS(i,function(i,n,e){-1<l.indexOf(e)&&!Array.isArray(n)&&(n.pattern||(n=this[i]={pattern:n}),n.inside=n.inside||{},"comment"==e&&(n.inside["md-link"]=a),"attr-value"==e?Prism.languages.insertBefore("inside","punctuation",{"url-link":t},n):n.inside["url-link"]=t,n.inside["email-link"]=r)}),i["url-link"]=t,i["email-link"]=r)}},Prism.hooks.add("before-highlight",function(i){Prism.plugins.autolinker.processGrammar(i.grammar)}),Prism.hooks.add("wrap",function(i){if(/-link$/.test(i.type)){i.tag="a";var n=i.content;if("email-link"==i.type&&0!=n.indexOf("mailto:"))n="mailto:"+n;else if("md-link"==i.type){var e=i.content.match(a);n=e[2],i.content=e[1]}i.attributes.href=n;try{i.content=decodeURIComponent(i.content)}catch(i){}}})}}();
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 32 */
+/***/ (function(module, exports) {
+
+(function () {
+	if (typeof self === 'undefined' || !self.Prism || !self.document || !document.createElement) {
+		return;
+	}
+
+	// The dependencies map is built automatically with gulp
+	var lang_dependencies = /*dependencies_placeholder[*/{
+		"javascript": "clike",
+		"actionscript": "javascript",
+		"arduino": "cpp",
+		"aspnet": [
+			"markup",
+			"csharp"
+		],
+		"bison": "c",
+		"c": "clike",
+		"csharp": "clike",
+		"cpp": "c",
+		"coffeescript": "javascript",
+		"crystal": "ruby",
+		"css-extras": "css",
+		"d": "clike",
+		"dart": "clike",
+		"django": "markup-templating",
+		"ejs": [
+			"javascript",
+			"markup-templating"
+		],
+		"etlua": [
+			"lua",
+			"markup-templating"
+		],
+		"erb": [
+			"ruby",
+			"markup-templating"
+		],
+		"fsharp": "clike",
+		"firestore-security-rules": "clike",
+		"flow": "javascript",
+		"ftl": "markup-templating",
+		"glsl": "clike",
+		"gml": "clike",
+		"go": "clike",
+		"groovy": "clike",
+		"haml": "ruby",
+		"handlebars": "markup-templating",
+		"haxe": "clike",
+		"java": "clike",
+		"javadoc": [
+			"markup",
+			"java",
+			"javadoclike"
+		],
+		"jolie": "clike",
+		"jsdoc": [
+			"javascript",
+			"javadoclike"
+		],
+		"js-extras": "javascript",
+		"js-templates": "javascript",
+		"jsonp": "json",
+		"json5": "json",
+		"kotlin": "clike",
+		"latte": [
+			"clike",
+			"markup-templating",
+			"php"
+		],
+		"less": "css",
+		"lilypond": "scheme",
+		"markdown": "markup",
+		"markup-templating": "markup",
+		"n4js": "javascript",
+		"nginx": "clike",
+		"objectivec": "c",
+		"opencl": "cpp",
+		"parser": "markup",
+		"php": [
+			"clike",
+			"markup-templating"
+		],
+		"phpdoc": [
+			"php",
+			"javadoclike"
+		],
+		"php-extras": "php",
+		"plsql": "sql",
+		"processing": "clike",
+		"protobuf": "clike",
+		"pug": [
+			"markup",
+			"javascript"
+		],
+		"qml": "javascript",
+		"qore": "clike",
+		"jsx": [
+			"markup",
+			"javascript"
+		],
+		"tsx": [
+			"jsx",
+			"typescript"
+		],
+		"reason": "clike",
+		"ruby": "clike",
+		"sass": "css",
+		"scss": "css",
+		"scala": "java",
+		"shell-session": "bash",
+		"smarty": "markup-templating",
+		"solidity": "clike",
+		"soy": "markup-templating",
+		"sparql": "turtle",
+		"sqf": "clike",
+		"swift": "clike",
+		"tap": "yaml",
+		"textile": "markup",
+		"tt2": [
+			"clike",
+			"markup-templating"
+		],
+		"twig": "markup",
+		"typescript": "javascript",
+		"t4-cs": [
+			"t4-templating",
+			"csharp"
+		],
+		"t4-vb": [
+			"t4-templating",
+			"visual-basic"
+		],
+		"vala": "clike",
+		"vbnet": "basic",
+		"velocity": "markup",
+		"wiki": "markup",
+		"xeora": "markup",
+		"xquery": "markup"
+	}/*]*/;
+
+	var lang_aliases = /*aliases_placeholder[*/{
+		"html": "markup",
+		"xml": "markup",
+		"svg": "markup",
+		"mathml": "markup",
+		"js": "javascript",
+		"g4": "antlr4",
+		"adoc": "asciidoc",
+		"shell": "bash",
+		"rbnf": "bnf",
+		"cs": "csharp",
+		"dotnet": "csharp",
+		"coffee": "coffeescript",
+		"jinja2": "django",
+		"dns-zone": "dns-zone-file",
+		"dockerfile": "docker",
+		"gamemakerlanguage": "gml",
+		"hs": "haskell",
+		"tex": "latex",
+		"context": "latex",
+		"ly": "lilypond",
+		"emacs": "lisp",
+		"elisp": "lisp",
+		"emacs-lisp": "lisp",
+		"md": "markdown",
+		"moon": "moonscript",
+		"n4jsd": "n4js",
+		"objectpascal": "pascal",
+		"px": "pcaxis",
+		"py": "python",
+		"robot": "robotframework",
+		"rb": "ruby",
+		"rq": "sparql",
+		"trig": "turtle",
+		"ts": "typescript",
+		"t4": "t4-cs",
+		"vb": "visual-basic",
+		"xeoracube": "xeora",
+		"yml": "yaml"
+	}/*]*/;
+
+	/**
+	 * @typedef LangDataItem
+	 * @property {{ success?: () => void, error?: () => void }[]} callbacks
+	 * @property {boolean} [error]
+	 * @property {boolean} [loading]
+	 */
+	/** @type {Object<string, LangDataItem>} */
+	var lang_data = {};
+
+	var ignored_language = 'none';
+	var languages_path = 'components/';
+
+	var script = Prism.util.currentScript();
+	if (script) {
+		var autoloaderFile = /\bplugins\/autoloader\/prism-autoloader\.(?:min\.)js$/i;
+		var prismFile = /[\w-]+\.(?:min\.)js$/i;
+		if (script.hasAttribute('data-autoloader-path')) {
+			// data-autoloader-path is set, so just use it
+			languages_path = script.getAttribute('data-autoloader-path').trim().replace(/\/?$/, '/');
+		} else {
+			var src = script.src;
+			if (autoloaderFile.test(src)) {
+				// the script is the original autoloader script in the usual Prism project structure
+				languages_path = src.replace(autoloaderFile, 'components/');
+			} else if (prismFile.test(src)) {
+				// the script is part of a bundle like a custom prism.js from the download page
+				languages_path = src.replace(prismFile, 'components/');
+			}
+		}
+	}
+
+	var config = Prism.plugins.autoloader = {
+		languages_path: languages_path,
+		use_minified: true,
+		loadLanguages: loadLanguages
+	};
+
+
+	/**
+	 * Lazily loads an external script.
+	 *
+	 * @param {string} src
+	 * @param {() => void} [success]
+	 * @param {() => void} [error]
+	 */
+	function addScript(src, success, error) {
+		var s = document.createElement('script');
+		s.src = src;
+		s.async = true;
+		s.onload = function () {
+			document.body.removeChild(s);
+			success && success();
+		};
+		s.onerror = function () {
+			document.body.removeChild(s);
+			error && error();
+		};
+		document.body.appendChild(s);
+	}
+
+	/**
+	 * Returns the path to a grammar, using the language_path and use_minified config keys.
+	 *
+	 * @param {string} lang
+	 * @returns {string}
+	 */
+	function getLanguagePath(lang) {
+		return config.languages_path +
+			'prism-' + lang
+			+ (config.use_minified ? '.min' : '') + '.js'
+	}
+
+	/**
+	 * Tries to load the grammar(s) and once loaded, highlights the given element again.
+	 *
+	 * @param {string} lang
+	 * @param {HTMLElement} elt
+	 */
+	function registerElement(lang, elt) {
+		if (lang in lang_aliases) {
+			lang = lang_aliases[lang];
+		}
+
+		// Look for additional dependencies defined on the <code> or <pre> tags
+		var deps = elt.getAttribute('data-dependencies');
+		var parent = elt.parentElement;
+		if (!deps && parent && parent.tagName.toLowerCase() === 'pre') {
+			deps = parent.getAttribute('data-dependencies');
+		}
+
+		if (deps) {
+			deps = deps.split(/\s*,\s*/g);
+		} else {
+			deps = [];
+		}
+
+		loadLanguages(deps, function () {
+			loadLanguage(lang, function () {
+				Prism.highlightElement(elt);
+			});
+		});
+	}
+
+	/**
+	 * Loads all given grammars concurrently.
+	 *
+	 * @param {string[]|string} languages
+	 * @param {(languages: string[]) => void} [success]
+	 * @param {(language: string) => void} [error] This callback will be invoked on the first language to fail.
+	 */
+	function loadLanguages(languages, success, error) {
+		if (typeof languages === 'string') {
+			languages = [languages];
+		}
+
+		var total = languages.length;
+		var completed = 0;
+		var failed = false;
+
+		if (total === 0) {
+			if (success) {
+				setTimeout(success, 0);
+			}
+			return;
+		}
+
+		function successCallback() {
+			if (failed) {
+				return;
+			}
+			completed++;
+			if (completed === total) {
+				success && success(languages);
+			}
+		}
+
+		languages.forEach(function (lang) {
+			loadLanguage(lang, successCallback, function () {
+				if (failed) {
+					return;
+				}
+				failed = true;
+				error && error(lang);
+			});
+		});
+	}
+
+	/**
+	 * Loads a grammar with its dependencies.
+	 *
+	 * @param {string} lang
+	 * @param {() => void} [success]
+	 * @param {() => void} [error]
+	 */
+	function loadLanguage(lang, success, error) {
+		var force = lang.indexOf('!') >= 0;
+
+		lang = lang.replace('!', '');
+		lang = lang_aliases[lang] || lang;
+
+		var load = function () {
+			var data = lang_data[lang];
+			if (!data) {
+				data = lang_data[lang] = {
+					callbacks: []
+				};
+			}
+			data.callbacks.push({
+				success: success,
+				error: error
+			});
+
+			if (!force && Prism.languages[lang]) {
+				languageCallback(lang, "success");
+			} else if (!force && data.error) {
+				languageCallback(lang, "error");
+			} else if (force || !data.loading) {
+				data.loading = true;
+				var src = getLanguagePath(lang);
+				addScript(src, function () {
+					data.loading = false;
+					languageCallback(lang, "success");
+
+				}, function () {
+					data.loading = false;
+					data.error = true;
+					languageCallback(lang, "error");
+				});
+			}
+		};
+
+		var dependencies = lang_dependencies[lang];
+		if (dependencies && dependencies.length) {
+			loadLanguages(dependencies, load, error);
+		} else {
+			load();
+		}
+	}
+
+	/**
+	 * Runs all callbacks of the given type for the given language.
+	 *
+	 * @param {string} lang
+	 * @param {"success" | "error"} type
+	 */
+	function languageCallback(lang, type) {
+		if (lang_data[lang]) {
+			var callbacks = lang_data[lang].callbacks;
+			for (var i = 0, l = callbacks.length; i < l; i++) {
+				var callback = callbacks[i][type];
+				if (callback) {
+					setTimeout(callback, 0);
+				}
+			}
+			callbacks.length = 0;
+		}
+	}
+
+	Prism.hooks.add('complete', function (env) {
+		if (env.element && env.language && !env.grammar) {
+			if (env.language !== ignored_language) {
+				registerElement(env.language, env.element);
+			}
+		}
+	});
+
+}());
+
+
+/***/ }),
+/* 33 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof self&&self.Prism&&self.document&&document.createElement){var c={javascript:"clike",actionscript:"javascript",arduino:"cpp",aspnet:["markup","csharp"],bison:"c",c:"clike",csharp:"clike",cpp:"c",coffeescript:"javascript",crystal:"ruby","css-extras":"css",d:"clike",dart:"clike",django:"markup-templating",ejs:["javascript","markup-templating"],etlua:["lua","markup-templating"],erb:["ruby","markup-templating"],fsharp:"clike","firestore-security-rules":"clike",flow:"javascript",ftl:"markup-templating",glsl:"clike",gml:"clike",go:"clike",groovy:"clike",haml:"ruby",handlebars:"markup-templating",haxe:"clike",java:"clike",javadoc:["markup","java","javadoclike"],jolie:"clike",jsdoc:["javascript","javadoclike"],"js-extras":"javascript","js-templates":"javascript",jsonp:"json",json5:"json",kotlin:"clike",latte:["clike","markup-templating","php"],less:"css",lilypond:"scheme",markdown:"markup","markup-templating":"markup",n4js:"javascript",nginx:"clike",objectivec:"c",opencl:"cpp",parser:"markup",php:["clike","markup-templating"],phpdoc:["php","javadoclike"],"php-extras":"php",plsql:"sql",processing:"clike",protobuf:"clike",pug:["markup","javascript"],qml:"javascript",qore:"clike",jsx:["markup","javascript"],tsx:["jsx","typescript"],reason:"clike",ruby:"clike",sass:"css",scss:"css",scala:"java","shell-session":"bash",smarty:"markup-templating",solidity:"clike",soy:"markup-templating",sparql:"turtle",sqf:"clike",swift:"clike",tap:"yaml",textile:"markup",tt2:["clike","markup-templating"],twig:"markup",typescript:"javascript","t4-cs":["t4-templating","csharp"],"t4-vb":["t4-templating","visual-basic"],vala:"clike",vbnet:"basic",velocity:"markup",wiki:"markup",xeora:"markup",xquery:"markup"},l={html:"markup",xml:"markup",svg:"markup",mathml:"markup",js:"javascript",g4:"antlr4",adoc:"asciidoc",shell:"bash",rbnf:"bnf",cs:"csharp",dotnet:"csharp",coffee:"coffeescript",jinja2:"django","dns-zone":"dns-zone-file",dockerfile:"docker",gamemakerlanguage:"gml",hs:"haskell",tex:"latex",context:"latex",ly:"lilypond",emacs:"lisp",elisp:"lisp","emacs-lisp":"lisp",md:"markdown",moon:"moonscript",n4jsd:"n4js",objectpascal:"pascal",px:"pcaxis",py:"python",robot:"robotframework",rb:"ruby",rq:"sparql",trig:"turtle",ts:"typescript",t4:"t4-cs",vb:"visual-basic",xeoracube:"xeora",yml:"yaml"},n={},a="components/",e=Prism.util.currentScript();if(e){var t=/\bplugins\/autoloader\/prism-autoloader\.(?:min\.)js$/i,s=/[\w-]+\.(?:min\.)js$/i;if(e.hasAttribute("data-autoloader-path"))a=e.getAttribute("data-autoloader-path").trim().replace(/\/?$/,"/");else{var i=e.src;t.test(i)?a=i.replace(t,"components/"):s.test(i)&&(a=i.replace(s,"components/"))}}var p=Prism.plugins.autoloader={languages_path:a,use_minified:!0,loadLanguages:o};Prism.hooks.add("complete",function(a){a.element&&a.language&&!a.grammar&&"none"!==a.language&&function(a,e){a in l&&(a=l[a]);var t=e.getAttribute("data-dependencies"),s=e.parentElement;!t&&s&&"pre"===s.tagName.toLowerCase()&&(t=s.getAttribute("data-dependencies")),o(t=t?t.split(/\s*,\s*/g):[],function(){m(a,function(){Prism.highlightElement(e)})})}(a.language,a.element)})}function o(a,e,t){"string"==typeof a&&(a=[a]);var s=a.length,i=0,r=!1;function c(){r||++i===s&&e&&e(a)}0!==s?a.forEach(function(a){m(a,c,function(){r||(r=!0,t&&t(a))})}):e&&setTimeout(e,0)}function m(e,t,s){var i=0<=e.indexOf("!");e=e.replace("!",""),e=l[e]||e;var a=function(){var a=n[e];if(a||(a=n[e]={callbacks:[]}),a.callbacks.push({success:t,error:s}),!i&&Prism.languages[e])u(e,"success");else if(!i&&a.error)u(e,"error");else if(i||!a.loading){a.loading=!0,function(a,e,t){var s=document.createElement("script");s.src=a,s.async=!0,s.onload=function(){document.body.removeChild(s),e&&e()},s.onerror=function(){document.body.removeChild(s),t&&t()},document.body.appendChild(s)}(function(a){return p.languages_path+"prism-"+a+(p.use_minified?".min":"")+".js"}(e),function(){a.loading=!1,u(e,"success")},function(){a.loading=!1,a.error=!0,u(e,"error")})}},r=c[e];r&&r.length?o(r,a,s):a()}function u(a,e){if(n[a]){for(var t=n[a].callbacks,s=0,i=t.length;s<i;s++){var r=t[s][e];r&&setTimeout(r,0)}t.length=0}}}();
+
+/***/ }),
+/* 34 */
+/***/ (function(module, exports) {
+
+(function() {
+
+if (typeof self === 'undefined' || !self.Prism || !self.document) {
+	return;
+}
+
+var clsReg = /(?:^|\s)command-line(?:\s|$)/;
+
+Prism.hooks.add('before-highlight', function (env) {
+	var vars = env.vars = env.vars || {};
+	var commandLine = vars['command-line'] = vars['command-line'] || {};
+
+	if (commandLine.complete || !env.code) {
+		commandLine.complete = true;
+		return;
+	}
+
+	// Works only for <code> wrapped inside <pre> (not inline).
+	var pre = env.element.parentNode;
+	if (!pre || !/pre/i.test(pre.nodeName) || // Abort only if neither the <pre> nor the <code> have the class
+		(!clsReg.test(pre.className) && !clsReg.test(env.element.className))) {
+		commandLine.complete = true;
+		return;
+	}
+
+	if (env.element.querySelector('.command-line-prompt')) { // Abort if prompt already exists.
+		commandLine.complete = true;
+		return;
+	}
+
+	var codeLines = env.code.split('\n');
+	commandLine.numberOfLines = codeLines.length;
+	var outputLines = commandLine.outputLines = [];
+
+	var outputSections = pre.getAttribute('data-output');
+	var outputFilter = pre.getAttribute('data-filter-output');
+	if (outputSections || outputSections === '') { // The user specified the output lines. -- cwells
+		outputSections = outputSections.split(',');
+		for (var i = 0; i < outputSections.length; i++) { // Parse the output sections into start/end ranges. -- cwells
+			var range = outputSections[i].split('-');
+			var outputStart = parseInt(range[0], 10);
+			var outputEnd = (range.length === 2 ? parseInt(range[1], 10) : outputStart);
+
+			if (!isNaN(outputStart) && !isNaN(outputEnd)) {
+				if (outputStart < 1) {
+					outputStart = 1;
+				}
+				if (outputEnd > codeLines.length) {
+					outputEnd = codeLines.length;
+				}
+				// Convert start and end to 0-based to simplify the arrays. -- cwells
+				outputStart--;
+				outputEnd--;
+				// Save the output line in an array and clear it in the code so it's not highlighted. -- cwells
+				for (var j = outputStart; j <= outputEnd; j++) {
+					outputLines[j] = codeLines[j];
+					codeLines[j] = '';
+				}
+			}
+		}
+	} else if (outputFilter) { // Treat lines beginning with this string as output. -- cwells
+		for (var i = 0; i < codeLines.length; i++) {
+			if (codeLines[i].indexOf(outputFilter) === 0) { // This line is output. -- cwells
+				outputLines[i] = codeLines[i].slice(outputFilter.length);
+				codeLines[i] = '';
+			}
+		}
+	}
+
+	env.code = codeLines.join('\n');
+});
+
+Prism.hooks.add('before-insert', function (env) {
+	var vars = env.vars = env.vars || {};
+	var commandLine = vars['command-line'] = vars['command-line'] || {};
+	if (commandLine.complete) {
+		return;
+	}
+
+	// Reinsert the output lines into the highlighted code. -- cwells
+	var codeLines = env.highlightedCode.split('\n');
+	for (var i = 0, l = (commandLine.outputLines || []).length; i < l; i++) {
+		if (commandLine.outputLines.hasOwnProperty(i)) {
+			codeLines[i] = commandLine.outputLines[i];
+		}
+	}
+	env.highlightedCode = codeLines.join('\n');
+});
+
+Prism.hooks.add('complete', function (env) {
+	var vars = env.vars = env.vars || {};
+	var commandLine = vars['command-line'] = vars['command-line'] || {};
+	if (commandLine.complete) {
+		return;
+	}
+
+	var pre = env.element.parentNode;
+	if (clsReg.test(env.element.className)) { // Remove the class "command-line" from the <code>
+		env.element.className = env.element.className.replace(clsReg, ' ');
+	}
+	if (!clsReg.test(pre.className)) { // Add the class "command-line" to the <pre>
+		pre.className += ' command-line';
+	}
+
+	var getAttribute = function(key, defaultValue) {
+		return (pre.getAttribute(key) || defaultValue).replace(/"/g, '&quot');
+	};
+
+	// Create the "rows" that will become the command-line prompts. -- cwells
+	var promptLines = new Array((commandLine.numberOfLines || 0) + 1);
+	var promptText = getAttribute('data-prompt', '');
+	if (promptText !== '') {
+		promptLines = promptLines.join('<span data-prompt="' + promptText + '"></span>');
+	} else {
+		var user = getAttribute('data-user', 'user');
+		var host = getAttribute('data-host', 'localhost');
+		promptLines = promptLines.join('<span data-user="' + user + '" data-host="' + host + '"></span>');
+	}
+
+	// Create the wrapper element. -- cwells
+	var prompt = document.createElement('span');
+	prompt.className = 'command-line-prompt';
+	prompt.innerHTML = promptLines;
+
+	// Remove the prompt from the output lines. -- cwells
+	for (var i = 0, l = (commandLine.outputLines || []).length; i < l; i++) {
+		if (commandLine.outputLines.hasOwnProperty(i)) {
+			var node = prompt.children[i];
+			node.removeAttribute('data-user');
+			node.removeAttribute('data-host');
+			node.removeAttribute('data-prompt');
+		}
+	}
+
+	env.element.insertBefore(prompt, env.element.firstChild);
+	commandLine.complete = true;
+});
+
+}());
+
+
+/***/ }),
+/* 35 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof self&&self.Prism&&self.document){var u=/(?:^|\s)command-line(?:\s|$)/;Prism.hooks.add("before-highlight",function(e){var t=e.vars=e.vars||{},a=t["command-line"]=t["command-line"]||{};if(!a.complete&&e.code){var n=e.element.parentNode;if(n&&/pre/i.test(n.nodeName)&&(u.test(n.className)||u.test(e.element.className)))if(e.element.querySelector(".command-line-prompt"))a.complete=!0;else{var r=e.code.split("\n");a.numberOfLines=r.length;var s=a.outputLines=[],o=n.getAttribute("data-output"),i=n.getAttribute("data-filter-output");if(o||""===o){o=o.split(",");for(var l=0;l<o.length;l++){var m=o[l].split("-"),p=parseInt(m[0],10),d=2===m.length?parseInt(m[1],10):p;if(!isNaN(p)&&!isNaN(d)){p<1&&(p=1),d>r.length&&(d=r.length),d--;for(var c=--p;c<=d;c++)s[c]=r[c],r[c]=""}}}else if(i)for(l=0;l<r.length;l++)0===r[l].indexOf(i)&&(s[l]=r[l].slice(i.length),r[l]="");e.code=r.join("\n")}else a.complete=!0}else a.complete=!0}),Prism.hooks.add("before-insert",function(e){var t=e.vars=e.vars||{},a=t["command-line"]=t["command-line"]||{};if(!a.complete){for(var n=e.highlightedCode.split("\n"),r=0,s=(a.outputLines||[]).length;r<s;r++)a.outputLines.hasOwnProperty(r)&&(n[r]=a.outputLines[r]);e.highlightedCode=n.join("\n")}}),Prism.hooks.add("complete",function(e){var t=e.vars=e.vars||{},a=t["command-line"]=t["command-line"]||{};if(!a.complete){var n=e.element.parentNode;u.test(e.element.className)&&(e.element.className=e.element.className.replace(u," ")),u.test(n.className)||(n.className+=" command-line");var r=function(e,t){return(n.getAttribute(e)||t).replace(/"/g,"&quot")},s=new Array((a.numberOfLines||0)+1),o=r("data-prompt","");if(""!==o)s=s.join('<span data-prompt="'+o+'"></span>');else{var i=r("data-user","user"),l=r("data-host","localhost");s=s.join('<span data-user="'+i+'" data-host="'+l+'"></span>')}var m=document.createElement("span");m.className="command-line-prompt",m.innerHTML=s;for(var p=0,d=(a.outputLines||[]).length;p<d;p++)if(a.outputLines.hasOwnProperty(p)){var c=m.children[p];c.removeAttribute("data-user"),c.removeAttribute("data-host"),c.removeAttribute("data-prompt")}e.element.insertBefore(m,e.element.firstChild),a.complete=!0}})}}();
+
+/***/ }),
+/* 36 */
+/***/ (function(module, exports, __webpack_require__) {
+
+(function(){
+	if (typeof self === 'undefined' || !self.Prism || !self.document) {
+		return;
+	}
+
+	if (!Prism.plugins.toolbar) {
+		console.warn('Copy to Clipboard plugin loaded before Toolbar plugin.');
+
+		return;
+	}
+
+	var ClipboardJS = window.ClipboardJS || undefined;
+
+	if (!ClipboardJS && "function" === 'function') {
+		ClipboardJS = __webpack_require__(37);
+	}
+
+	var callbacks = [];
+
+	if (!ClipboardJS) {
+		var script = document.createElement('script');
+		var head = document.querySelector('head');
+
+		script.onload = function() {
+			ClipboardJS = window.ClipboardJS;
+
+			if (ClipboardJS) {
+				while (callbacks.length) {
+					callbacks.pop()();
+				}
+			}
+		};
+
+		script.src = 'https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js';
+		head.appendChild(script);
+	}
+
+	Prism.plugins.toolbar.registerButton('copy-to-clipboard', function (env) {
+		var linkCopy = document.createElement('button');
+		linkCopy.textContent = 'Copy';
+
+		if (!ClipboardJS) {
+			callbacks.push(registerClipboard);
+		} else {
+			registerClipboard();
+		}
+
+		return linkCopy;
+
+		function registerClipboard() {
+			var clip = new ClipboardJS(linkCopy, {
+				'text': function () {
+					return env.code;
+				}
+			});
+
+			clip.on('success', function() {
+				linkCopy.textContent = 'Copied!';
+
+				resetText();
+			});
+			clip.on('error', function () {
+				linkCopy.textContent = 'Press Ctrl+C to copy';
+
+				resetText();
+			});
+		}
+
+		function resetText() {
+			setTimeout(function () {
+				linkCopy.textContent = 'Copy';
+			}, 5000);
+		}
+	});
+})();
+
+
+/***/ }),
+/* 37 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/*!
+ * clipboard.js v2.0.6
+ * https://clipboardjs.com/
+ * 
+ * Licensed MIT © Zeno Rocha
+ */
+(function webpackUniversalModuleDefinition(root, factory) {
+	if(true)
+		module.exports = factory();
+	else if(typeof define === 'function' && define.amd)
+		define([], factory);
+	else if(typeof exports === 'object')
+		exports["ClipboardJS"] = factory();
+	else
+		root["ClipboardJS"] = factory();
+})(this, function() {
+return /******/ (function(modules) { // webpackBootstrap
+/******/ 	// The module cache
+/******/ 	var installedModules = {};
+/******/
+/******/ 	// The require function
+/******/ 	function __webpack_require__(moduleId) {
+/******/
+/******/ 		// Check if module is in cache
+/******/ 		if(installedModules[moduleId]) {
+/******/ 			return installedModules[moduleId].exports;
+/******/ 		}
+/******/ 		// Create a new module (and put it into the cache)
+/******/ 		var module = installedModules[moduleId] = {
+/******/ 			i: moduleId,
+/******/ 			l: false,
+/******/ 			exports: {}
+/******/ 		};
+/******/
+/******/ 		// Execute the module function
+/******/ 		modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+/******/
+/******/ 		// Flag the module as loaded
+/******/ 		module.l = true;
+/******/
+/******/ 		// Return the exports of the module
+/******/ 		return module.exports;
+/******/ 	}
+/******/
+/******/
+/******/ 	// expose the modules object (__webpack_modules__)
+/******/ 	__webpack_require__.m = modules;
+/******/
+/******/ 	// expose the module cache
+/******/ 	__webpack_require__.c = installedModules;
+/******/
+/******/ 	// define getter function for harmony exports
+/******/ 	__webpack_require__.d = function(exports, name, getter) {
+/******/ 		if(!__webpack_require__.o(exports, name)) {
+/******/ 			Object.defineProperty(exports, name, { enumerable: true, get: getter });
+/******/ 		}
+/******/ 	};
+/******/
+/******/ 	// define __esModule on exports
+/******/ 	__webpack_require__.r = function(exports) {
+/******/ 		if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+/******/ 			Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
+/******/ 		}
+/******/ 		Object.defineProperty(exports, '__esModule', { value: true });
+/******/ 	};
+/******/
+/******/ 	// create a fake namespace object
+/******/ 	// mode & 1: value is a module id, require it
+/******/ 	// mode & 2: merge all properties of value into the ns
+/******/ 	// mode & 4: return value when already ns object
+/******/ 	// mode & 8|1: behave like require
+/******/ 	__webpack_require__.t = function(value, mode) {
+/******/ 		if(mode & 1) value = __webpack_require__(value);
+/******/ 		if(mode & 8) return value;
+/******/ 		if((mode & 4) && typeof value === 'object' && value && value.__esModule) return value;
+/******/ 		var ns = Object.create(null);
+/******/ 		__webpack_require__.r(ns);
+/******/ 		Object.defineProperty(ns, 'default', { enumerable: true, value: value });
+/******/ 		if(mode & 2 && typeof value != 'string') for(var key in value) __webpack_require__.d(ns, key, function(key) { return value[key]; }.bind(null, key));
+/******/ 		return ns;
+/******/ 	};
+/******/
+/******/ 	// getDefaultExport function for compatibility with non-harmony modules
+/******/ 	__webpack_require__.n = function(module) {
+/******/ 		var getter = module && module.__esModule ?
+/******/ 			function getDefault() { return module['default']; } :
+/******/ 			function getModuleExports() { return module; };
+/******/ 		__webpack_require__.d(getter, 'a', getter);
+/******/ 		return getter;
+/******/ 	};
+/******/
+/******/ 	// Object.prototype.hasOwnProperty.call
+/******/ 	__webpack_require__.o = function(object, property) { return Object.prototype.hasOwnProperty.call(object, property); };
+/******/
+/******/ 	// __webpack_public_path__
+/******/ 	__webpack_require__.p = "";
+/******/
+/******/
+/******/ 	// Load entry module and return exports
+/******/ 	return __webpack_require__(__webpack_require__.s = 6);
+/******/ })
+/************************************************************************/
+/******/ ([
+/* 0 */
+/***/ (function(module, exports) {
+
+function select(element) {
+    var selectedText;
+
+    if (element.nodeName === 'SELECT') {
+        element.focus();
+
+        selectedText = element.value;
+    }
+    else if (element.nodeName === 'INPUT' || element.nodeName === 'TEXTAREA') {
+        var isReadOnly = element.hasAttribute('readonly');
+
+        if (!isReadOnly) {
+            element.setAttribute('readonly', '');
+        }
+
+        element.select();
+        element.setSelectionRange(0, element.value.length);
+
+        if (!isReadOnly) {
+            element.removeAttribute('readonly');
+        }
+
+        selectedText = element.value;
+    }
+    else {
+        if (element.hasAttribute('contenteditable')) {
+            element.focus();
+        }
+
+        var selection = window.getSelection();
+        var range = document.createRange();
+
+        range.selectNodeContents(element);
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        selectedText = selection.toString();
+    }
+
+    return selectedText;
+}
+
+module.exports = select;
+
+
+/***/ }),
+/* 1 */
+/***/ (function(module, exports) {
+
+function E () {
+  // Keep this empty so it's easier to inherit from
+  // (via https://github.com/lipsmack from https://github.com/scottcorgan/tiny-emitter/issues/3)
+}
+
+E.prototype = {
+  on: function (name, callback, ctx) {
+    var e = this.e || (this.e = {});
+
+    (e[name] || (e[name] = [])).push({
+      fn: callback,
+      ctx: ctx
+    });
+
+    return this;
+  },
+
+  once: function (name, callback, ctx) {
+    var self = this;
+    function listener () {
+      self.off(name, listener);
+      callback.apply(ctx, arguments);
+    };
+
+    listener._ = callback
+    return this.on(name, listener, ctx);
+  },
+
+  emit: function (name) {
+    var data = [].slice.call(arguments, 1);
+    var evtArr = ((this.e || (this.e = {}))[name] || []).slice();
+    var i = 0;
+    var len = evtArr.length;
+
+    for (i; i < len; i++) {
+      evtArr[i].fn.apply(evtArr[i].ctx, data);
+    }
+
+    return this;
+  },
+
+  off: function (name, callback) {
+    var e = this.e || (this.e = {});
+    var evts = e[name];
+    var liveEvents = [];
+
+    if (evts && callback) {
+      for (var i = 0, len = evts.length; i < len; i++) {
+        if (evts[i].fn !== callback && evts[i].fn._ !== callback)
+          liveEvents.push(evts[i]);
+      }
+    }
+
+    // Remove event from queue to prevent memory leak
+    // Suggested by https://github.com/lazd
+    // Ref: https://github.com/scottcorgan/tiny-emitter/commit/c6ebfaa9bc973b33d110a84a307742b7cf94c953#commitcomment-5024910
+
+    (liveEvents.length)
+      ? e[name] = liveEvents
+      : delete e[name];
+
+    return this;
+  }
+};
+
+module.exports = E;
+module.exports.TinyEmitter = E;
+
+
+/***/ }),
+/* 2 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var is = __webpack_require__(3);
+var delegate = __webpack_require__(4);
+
+/**
+ * Validates all params and calls the right
+ * listener function based on its target type.
+ *
+ * @param {String|HTMLElement|HTMLCollection|NodeList} target
+ * @param {String} type
+ * @param {Function} callback
+ * @return {Object}
+ */
+function listen(target, type, callback) {
+    if (!target && !type && !callback) {
+        throw new Error('Missing required arguments');
+    }
+
+    if (!is.string(type)) {
+        throw new TypeError('Second argument must be a String');
+    }
+
+    if (!is.fn(callback)) {
+        throw new TypeError('Third argument must be a Function');
+    }
+
+    if (is.node(target)) {
+        return listenNode(target, type, callback);
+    }
+    else if (is.nodeList(target)) {
+        return listenNodeList(target, type, callback);
+    }
+    else if (is.string(target)) {
+        return listenSelector(target, type, callback);
+    }
+    else {
+        throw new TypeError('First argument must be a String, HTMLElement, HTMLCollection, or NodeList');
+    }
+}
+
+/**
+ * Adds an event listener to a HTML element
+ * and returns a remove listener function.
+ *
+ * @param {HTMLElement} node
+ * @param {String} type
+ * @param {Function} callback
+ * @return {Object}
+ */
+function listenNode(node, type, callback) {
+    node.addEventListener(type, callback);
+
+    return {
+        destroy: function() {
+            node.removeEventListener(type, callback);
+        }
+    }
+}
+
+/**
+ * Add an event listener to a list of HTML elements
+ * and returns a remove listener function.
+ *
+ * @param {NodeList|HTMLCollection} nodeList
+ * @param {String} type
+ * @param {Function} callback
+ * @return {Object}
+ */
+function listenNodeList(nodeList, type, callback) {
+    Array.prototype.forEach.call(nodeList, function(node) {
+        node.addEventListener(type, callback);
+    });
+
+    return {
+        destroy: function() {
+            Array.prototype.forEach.call(nodeList, function(node) {
+                node.removeEventListener(type, callback);
+            });
+        }
+    }
+}
+
+/**
+ * Add an event listener to a selector
+ * and returns a remove listener function.
+ *
+ * @param {String} selector
+ * @param {String} type
+ * @param {Function} callback
+ * @return {Object}
+ */
+function listenSelector(selector, type, callback) {
+    return delegate(document.body, selector, type, callback);
+}
+
+module.exports = listen;
+
+
+/***/ }),
+/* 3 */
+/***/ (function(module, exports) {
+
+/**
+ * Check if argument is a HTML element.
+ *
+ * @param {Object} value
+ * @return {Boolean}
+ */
+exports.node = function(value) {
+    return value !== undefined
+        && value instanceof HTMLElement
+        && value.nodeType === 1;
+};
+
+/**
+ * Check if argument is a list of HTML elements.
+ *
+ * @param {Object} value
+ * @return {Boolean}
+ */
+exports.nodeList = function(value) {
+    var type = Object.prototype.toString.call(value);
+
+    return value !== undefined
+        && (type === '[object NodeList]' || type === '[object HTMLCollection]')
+        && ('length' in value)
+        && (value.length === 0 || exports.node(value[0]));
+};
+
+/**
+ * Check if argument is a string.
+ *
+ * @param {Object} value
+ * @return {Boolean}
+ */
+exports.string = function(value) {
+    return typeof value === 'string'
+        || value instanceof String;
+};
+
+/**
+ * Check if argument is a function.
+ *
+ * @param {Object} value
+ * @return {Boolean}
+ */
+exports.fn = function(value) {
+    var type = Object.prototype.toString.call(value);
+
+    return type === '[object Function]';
+};
+
+
+/***/ }),
+/* 4 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var closest = __webpack_require__(5);
+
+/**
+ * Delegates event to a selector.
+ *
+ * @param {Element} element
+ * @param {String} selector
+ * @param {String} type
+ * @param {Function} callback
+ * @param {Boolean} useCapture
+ * @return {Object}
+ */
+function _delegate(element, selector, type, callback, useCapture) {
+    var listenerFn = listener.apply(this, arguments);
+
+    element.addEventListener(type, listenerFn, useCapture);
+
+    return {
+        destroy: function() {
+            element.removeEventListener(type, listenerFn, useCapture);
+        }
+    }
+}
+
+/**
+ * Delegates event to a selector.
+ *
+ * @param {Element|String|Array} [elements]
+ * @param {String} selector
+ * @param {String} type
+ * @param {Function} callback
+ * @param {Boolean} useCapture
+ * @return {Object}
+ */
+function delegate(elements, selector, type, callback, useCapture) {
+    // Handle the regular Element usage
+    if (typeof elements.addEventListener === 'function') {
+        return _delegate.apply(null, arguments);
+    }
+
+    // Handle Element-less usage, it defaults to global delegation
+    if (typeof type === 'function') {
+        // Use `document` as the first parameter, then apply arguments
+        // This is a short way to .unshift `arguments` without running into deoptimizations
+        return _delegate.bind(null, document).apply(null, arguments);
+    }
+
+    // Handle Selector-based usage
+    if (typeof elements === 'string') {
+        elements = document.querySelectorAll(elements);
+    }
+
+    // Handle Array-like based usage
+    return Array.prototype.map.call(elements, function (element) {
+        return _delegate(element, selector, type, callback, useCapture);
+    });
+}
+
+/**
+ * Finds closest match and invokes callback.
+ *
+ * @param {Element} element
+ * @param {String} selector
+ * @param {String} type
+ * @param {Function} callback
+ * @return {Function}
+ */
+function listener(element, selector, type, callback) {
+    return function(e) {
+        e.delegateTarget = closest(e.target, selector);
+
+        if (e.delegateTarget) {
+            callback.call(element, e);
+        }
+    }
+}
+
+module.exports = delegate;
+
+
+/***/ }),
+/* 5 */
+/***/ (function(module, exports) {
+
+var DOCUMENT_NODE_TYPE = 9;
+
+/**
+ * A polyfill for Element.matches()
+ */
+if (typeof Element !== 'undefined' && !Element.prototype.matches) {
+    var proto = Element.prototype;
+
+    proto.matches = proto.matchesSelector ||
+                    proto.mozMatchesSelector ||
+                    proto.msMatchesSelector ||
+                    proto.oMatchesSelector ||
+                    proto.webkitMatchesSelector;
+}
+
+/**
+ * Finds the closest parent that matches a selector.
+ *
+ * @param {Element} element
+ * @param {String} selector
+ * @return {Function}
+ */
+function closest (element, selector) {
+    while (element && element.nodeType !== DOCUMENT_NODE_TYPE) {
+        if (typeof element.matches === 'function' &&
+            element.matches(selector)) {
+          return element;
+        }
+        element = element.parentNode;
+    }
+}
+
+module.exports = closest;
+
+
+/***/ }),
+/* 6 */
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+
+// EXTERNAL MODULE: ./node_modules/select/src/select.js
+var src_select = __webpack_require__(0);
+var select_default = /*#__PURE__*/__webpack_require__.n(src_select);
+
+// CONCATENATED MODULE: ./src/clipboard-action.js
+var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
+
+var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+
+
+/**
+ * Inner class which performs selection from either `text` or `target`
+ * properties and then executes copy or cut operations.
+ */
+
+var clipboard_action_ClipboardAction = function () {
+    /**
+     * @param {Object} options
+     */
+    function ClipboardAction(options) {
+        _classCallCheck(this, ClipboardAction);
+
+        this.resolveOptions(options);
+        this.initSelection();
+    }
+
+    /**
+     * Defines base properties passed from constructor.
+     * @param {Object} options
+     */
+
+
+    _createClass(ClipboardAction, [{
+        key: 'resolveOptions',
+        value: function resolveOptions() {
+            var options = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+
+            this.action = options.action;
+            this.container = options.container;
+            this.emitter = options.emitter;
+            this.target = options.target;
+            this.text = options.text;
+            this.trigger = options.trigger;
+
+            this.selectedText = '';
+        }
+
+        /**
+         * Decides which selection strategy is going to be applied based
+         * on the existence of `text` and `target` properties.
+         */
+
+    }, {
+        key: 'initSelection',
+        value: function initSelection() {
+            if (this.text) {
+                this.selectFake();
+            } else if (this.target) {
+                this.selectTarget();
+            }
+        }
+
+        /**
+         * Creates a fake textarea element, sets its value from `text` property,
+         * and makes a selection on it.
+         */
+
+    }, {
+        key: 'selectFake',
+        value: function selectFake() {
+            var _this = this;
+
+            var isRTL = document.documentElement.getAttribute('dir') == 'rtl';
+
+            this.removeFake();
+
+            this.fakeHandlerCallback = function () {
+                return _this.removeFake();
+            };
+            this.fakeHandler = this.container.addEventListener('click', this.fakeHandlerCallback) || true;
+
+            this.fakeElem = document.createElement('textarea');
+            // Prevent zooming on iOS
+            this.fakeElem.style.fontSize = '12pt';
+            // Reset box model
+            this.fakeElem.style.border = '0';
+            this.fakeElem.style.padding = '0';
+            this.fakeElem.style.margin = '0';
+            // Move element out of screen horizontally
+            this.fakeElem.style.position = 'absolute';
+            this.fakeElem.style[isRTL ? 'right' : 'left'] = '-9999px';
+            // Move element to the same position vertically
+            var yPosition = window.pageYOffset || document.documentElement.scrollTop;
+            this.fakeElem.style.top = yPosition + 'px';
+
+            this.fakeElem.setAttribute('readonly', '');
+            this.fakeElem.value = this.text;
+
+            this.container.appendChild(this.fakeElem);
+
+            this.selectedText = select_default()(this.fakeElem);
+            this.copyText();
+        }
+
+        /**
+         * Only removes the fake element after another click event, that way
+         * a user can hit `Ctrl+C` to copy because selection still exists.
+         */
+
+    }, {
+        key: 'removeFake',
+        value: function removeFake() {
+            if (this.fakeHandler) {
+                this.container.removeEventListener('click', this.fakeHandlerCallback);
+                this.fakeHandler = null;
+                this.fakeHandlerCallback = null;
+            }
+
+            if (this.fakeElem) {
+                this.container.removeChild(this.fakeElem);
+                this.fakeElem = null;
+            }
+        }
+
+        /**
+         * Selects the content from element passed on `target` property.
+         */
+
+    }, {
+        key: 'selectTarget',
+        value: function selectTarget() {
+            this.selectedText = select_default()(this.target);
+            this.copyText();
+        }
+
+        /**
+         * Executes the copy operation based on the current selection.
+         */
+
+    }, {
+        key: 'copyText',
+        value: function copyText() {
+            var succeeded = void 0;
+
+            try {
+                succeeded = document.execCommand(this.action);
+            } catch (err) {
+                succeeded = false;
+            }
+
+            this.handleResult(succeeded);
+        }
+
+        /**
+         * Fires an event based on the copy operation result.
+         * @param {Boolean} succeeded
+         */
+
+    }, {
+        key: 'handleResult',
+        value: function handleResult(succeeded) {
+            this.emitter.emit(succeeded ? 'success' : 'error', {
+                action: this.action,
+                text: this.selectedText,
+                trigger: this.trigger,
+                clearSelection: this.clearSelection.bind(this)
+            });
+        }
+
+        /**
+         * Moves focus away from `target` and back to the trigger, removes current selection.
+         */
+
+    }, {
+        key: 'clearSelection',
+        value: function clearSelection() {
+            if (this.trigger) {
+                this.trigger.focus();
+            }
+            document.activeElement.blur();
+            window.getSelection().removeAllRanges();
+        }
+
+        /**
+         * Sets the `action` to be performed which can be either 'copy' or 'cut'.
+         * @param {String} action
+         */
+
+    }, {
+        key: 'destroy',
+
+
+        /**
+         * Destroy lifecycle.
+         */
+        value: function destroy() {
+            this.removeFake();
+        }
+    }, {
+        key: 'action',
+        set: function set() {
+            var action = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 'copy';
+
+            this._action = action;
+
+            if (this._action !== 'copy' && this._action !== 'cut') {
+                throw new Error('Invalid "action" value, use either "copy" or "cut"');
+            }
+        }
+
+        /**
+         * Gets the `action` property.
+         * @return {String}
+         */
+        ,
+        get: function get() {
+            return this._action;
+        }
+
+        /**
+         * Sets the `target` property using an element
+         * that will be have its content copied.
+         * @param {Element} target
+         */
+
+    }, {
+        key: 'target',
+        set: function set(target) {
+            if (target !== undefined) {
+                if (target && (typeof target === 'undefined' ? 'undefined' : _typeof(target)) === 'object' && target.nodeType === 1) {
+                    if (this.action === 'copy' && target.hasAttribute('disabled')) {
+                        throw new Error('Invalid "target" attribute. Please use "readonly" instead of "disabled" attribute');
+                    }
+
+                    if (this.action === 'cut' && (target.hasAttribute('readonly') || target.hasAttribute('disabled'))) {
+                        throw new Error('Invalid "target" attribute. You can\'t cut text from elements with "readonly" or "disabled" attributes');
+                    }
+
+                    this._target = target;
+                } else {
+                    throw new Error('Invalid "target" value, use a valid Element');
+                }
+            }
+        }
+
+        /**
+         * Gets the `target` property.
+         * @return {String|HTMLElement}
+         */
+        ,
+        get: function get() {
+            return this._target;
+        }
+    }]);
+
+    return ClipboardAction;
+}();
+
+/* harmony default export */ var clipboard_action = (clipboard_action_ClipboardAction);
+// EXTERNAL MODULE: ./node_modules/tiny-emitter/index.js
+var tiny_emitter = __webpack_require__(1);
+var tiny_emitter_default = /*#__PURE__*/__webpack_require__.n(tiny_emitter);
+
+// EXTERNAL MODULE: ./node_modules/good-listener/src/listen.js
+var listen = __webpack_require__(2);
+var listen_default = /*#__PURE__*/__webpack_require__.n(listen);
+
+// CONCATENATED MODULE: ./src/clipboard.js
+var clipboard_typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
+
+var clipboard_createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+
+function clipboard_classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+function _possibleConstructorReturn(self, call) { if (!self) { throw new ReferenceError("this hasn't been initialised - super() hasn't been called"); } return call && (typeof call === "object" || typeof call === "function") ? call : self; }
+
+function _inherits(subClass, superClass) { if (typeof superClass !== "function" && superClass !== null) { throw new TypeError("Super expression must either be null or a function, not " + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass; }
+
+
+
+
+
+/**
+ * Base class which takes one or more elements, adds event listeners to them,
+ * and instantiates a new `ClipboardAction` on each click.
+ */
+
+var clipboard_Clipboard = function (_Emitter) {
+    _inherits(Clipboard, _Emitter);
+
+    /**
+     * @param {String|HTMLElement|HTMLCollection|NodeList} trigger
+     * @param {Object} options
+     */
+    function Clipboard(trigger, options) {
+        clipboard_classCallCheck(this, Clipboard);
+
+        var _this = _possibleConstructorReturn(this, (Clipboard.__proto__ || Object.getPrototypeOf(Clipboard)).call(this));
+
+        _this.resolveOptions(options);
+        _this.listenClick(trigger);
+        return _this;
+    }
+
+    /**
+     * Defines if attributes would be resolved using internal setter functions
+     * or custom functions that were passed in the constructor.
+     * @param {Object} options
+     */
+
+
+    clipboard_createClass(Clipboard, [{
+        key: 'resolveOptions',
+        value: function resolveOptions() {
+            var options = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+
+            this.action = typeof options.action === 'function' ? options.action : this.defaultAction;
+            this.target = typeof options.target === 'function' ? options.target : this.defaultTarget;
+            this.text = typeof options.text === 'function' ? options.text : this.defaultText;
+            this.container = clipboard_typeof(options.container) === 'object' ? options.container : document.body;
+        }
+
+        /**
+         * Adds a click event listener to the passed trigger.
+         * @param {String|HTMLElement|HTMLCollection|NodeList} trigger
+         */
+
+    }, {
+        key: 'listenClick',
+        value: function listenClick(trigger) {
+            var _this2 = this;
+
+            this.listener = listen_default()(trigger, 'click', function (e) {
+                return _this2.onClick(e);
+            });
+        }
+
+        /**
+         * Defines a new `ClipboardAction` on each click event.
+         * @param {Event} e
+         */
+
+    }, {
+        key: 'onClick',
+        value: function onClick(e) {
+            var trigger = e.delegateTarget || e.currentTarget;
+
+            if (this.clipboardAction) {
+                this.clipboardAction = null;
+            }
+
+            this.clipboardAction = new clipboard_action({
+                action: this.action(trigger),
+                target: this.target(trigger),
+                text: this.text(trigger),
+                container: this.container,
+                trigger: trigger,
+                emitter: this
+            });
+        }
+
+        /**
+         * Default `action` lookup function.
+         * @param {Element} trigger
+         */
+
+    }, {
+        key: 'defaultAction',
+        value: function defaultAction(trigger) {
+            return getAttributeValue('action', trigger);
+        }
+
+        /**
+         * Default `target` lookup function.
+         * @param {Element} trigger
+         */
+
+    }, {
+        key: 'defaultTarget',
+        value: function defaultTarget(trigger) {
+            var selector = getAttributeValue('target', trigger);
+
+            if (selector) {
+                return document.querySelector(selector);
+            }
+        }
+
+        /**
+         * Returns the support of the given action, or all actions if no action is
+         * given.
+         * @param {String} [action]
+         */
+
+    }, {
+        key: 'defaultText',
+
+
+        /**
+         * Default `text` lookup function.
+         * @param {Element} trigger
+         */
+        value: function defaultText(trigger) {
+            return getAttributeValue('text', trigger);
+        }
+
+        /**
+         * Destroy lifecycle.
+         */
+
+    }, {
+        key: 'destroy',
+        value: function destroy() {
+            this.listener.destroy();
+
+            if (this.clipboardAction) {
+                this.clipboardAction.destroy();
+                this.clipboardAction = null;
+            }
+        }
+    }], [{
+        key: 'isSupported',
+        value: function isSupported() {
+            var action = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : ['copy', 'cut'];
+
+            var actions = typeof action === 'string' ? [action] : action;
+            var support = !!document.queryCommandSupported;
+
+            actions.forEach(function (action) {
+                support = support && !!document.queryCommandSupported(action);
+            });
+
+            return support;
+        }
+    }]);
+
+    return Clipboard;
+}(tiny_emitter_default.a);
+
+/**
+ * Helper function to retrieve attribute value.
+ * @param {String} suffix
+ * @param {Element} element
+ */
+
+
+function getAttributeValue(suffix, element) {
+    var attribute = 'data-clipboard-' + suffix;
+
+    if (!element.hasAttribute(attribute)) {
+        return;
+    }
+
+    return element.getAttribute(attribute);
+}
+
+/* harmony default export */ var clipboard = __webpack_exports__["default"] = (clipboard_Clipboard);
+
+/***/ })
+/******/ ])["default"];
+});
+
+/***/ }),
+/* 38 */
+/***/ (function(module, exports, __webpack_require__) {
+
+!function(){if("undefined"!=typeof self&&self.Prism&&self.document)if(Prism.plugins.toolbar){var r=window.ClipboardJS||void 0;r||"function"!="function"||(r=__webpack_require__(37));var i=[];if(!r){var o=document.createElement("script"),e=document.querySelector("head");o.onload=function(){if(r=window.ClipboardJS)for(;i.length;)i.pop()()},o.src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js",e.appendChild(o)}Prism.plugins.toolbar.registerButton("copy-to-clipboard",function(e){var t=document.createElement("button");return t.textContent="Copy",r?o():i.push(o),t;function o(){var o=new r(t,{text:function(){return e.code}});o.on("success",function(){t.textContent="Copied!",n()}),o.on("error",function(){t.textContent="Press Ctrl+C to copy",n()})}function n(){setTimeout(function(){t.textContent="Copy"},5e3)}})}else console.warn("Copy to Clipboard plugin loaded before Toolbar plugin.")}();
+
+/***/ }),
+/* 39 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {(function () {
+
+	if (
+		(typeof self === 'undefined' || !self.Prism) &&
+		(typeof global === 'undefined' || !global.Prism)
+	) {
+		return;
+	}
+
+	/**
+	 * @callback ClassMapper
+	 * @param {string} className
+	 * @param {string} language
+	 * @returns {string}
+	 *
+	 * @callback ClassAdder
+	 * @param {ClassAdderEnvironment} env
+	 * @returns {undefined | string | string[]}
+	 *
+	 * @typedef ClassAdderEnvironment
+	 * @property {string} language
+	 * @property {string} type
+	 * @property {string} content
+	 */
+
+	// options
+
+	/** @type {ClassAdder | undefined} */
+	var adder;
+	/** @type {ClassMapper | undefined} */
+	var mapper;
+	/** @type {string} */
+	var prefixString = '';
+
+
+	Prism.plugins.customClass = {
+		/**
+		 * Sets the function which can be used to add custom aliases to any token.
+		 *
+		 * @param {ClassAdder} classAdder
+		 */
+		add: function (classAdder) {
+			adder = classAdder;
+		},
+		/**
+		 * Maps all class names using the given object or map function.
+		 *
+		 * This does not affect the prefix.
+		 *
+		 * @param {Object<string, string> | ClassMapper} classMapper
+		 */
+		map: function map(classMapper) {
+			if (typeof classMapper === 'function') {
+				mapper = classMapper;
+			} else {
+				mapper = function (className) {
+					return classMapper[className] || className;
+				};
+			}
+		},
+		/**
+		 * Adds the given prefix to all class names.
+		 *
+		 * @param {string} string
+		 */
+		prefix: function prefix(string) {
+			prefixString = string || '';
+		}
+	}
+
+	Prism.hooks.add('wrap', function (env) {
+		if (adder) {
+			var result = adder({
+				content: env.content,
+				type: env.type,
+				language: env.language
+			});
+
+			if (Array.isArray(result)) {
+				env.classes.push.apply(env.classes, result);
+			} else if (result) {
+				env.classes.push(result);
+			}
+		}
+
+		if (!mapper && !prefixString) {
+			return;
+		}
+
+		env.classes = env.classes.map(function (c) {
+			return prefixString + (mapper ? mapper(c, env.language) : c);
+		});
+	});
+
+})();
+
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 40 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {!function(){if("undefined"!=typeof self&&self.Prism||"undefined"!=typeof global&&global.Prism){var a,e,t="";Prism.plugins.customClass={add:function(n){a=n},map:function(s){e="function"==typeof s?s:function(n){return s[n]||n}},prefix:function(n){t=n||""}},Prism.hooks.add("wrap",function(s){if(a){var n=a({content:s.content,type:s.type,language:s.language});Array.isArray(n)?s.classes.push.apply(s.classes,n):n&&s.classes.push(n)}(e||t)&&(s.classes=s.classes.map(function(n){return t+(e?e(n,s.language):n)}))})}}();
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 41 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {(function () {
+
+	if (
+		typeof self !== 'undefined' && !self.Prism ||
+		typeof global !== 'undefined' && !global.Prism
+	) {
+		return;
+	}
+
+	var autoLinkerProcess = function (grammar) {
+		if (Prism.plugins.autolinker) {
+			Prism.plugins.autolinker.processGrammar(grammar);
+		}
+		return grammar;
+	};
+	var dataURI = {
+		pattern: /(.)\bdata:[^\/]+\/[^,]+,(?:(?!\1)[\s\S]|\\\1)+(?=\1)/,
+		lookbehind: true,
+		inside: {
+			'language-css': {
+				pattern: /(data:[^\/]+\/(?:[^+,]+\+)?css,)[\s\S]+/,
+				lookbehind: true
+			},
+			'language-javascript': {
+				pattern: /(data:[^\/]+\/(?:[^+,]+\+)?javascript,)[\s\S]+/,
+				lookbehind: true
+			},
+			'language-json': {
+				pattern: /(data:[^\/]+\/(?:[^+,]+\+)?json,)[\s\S]+/,
+				lookbehind: true
+			},
+			'language-markup': {
+				pattern: /(data:[^\/]+\/(?:[^+,]+\+)?(?:html|xml),)[\s\S]+/,
+				lookbehind: true
+			}
+		}
+	};
+
+	// Tokens that may contain URLs
+	var candidates = ['url', 'attr-value', 'string'];
+
+	Prism.plugins.dataURIHighlight = {
+		processGrammar: function (grammar) {
+			// Abort if grammar has already been processed
+			if (!grammar || grammar['data-uri']) {
+				return;
+			}
+
+			Prism.languages.DFS(grammar, function (key, def, type) {
+				if (candidates.indexOf(type) > -1 && !Array.isArray(def)) {
+					if (!def.pattern) {
+						def = this[key] = {
+							pattern: def
+						};
+					}
+
+					def.inside = def.inside || {};
+
+					if (type == 'attr-value') {
+						Prism.languages.insertBefore('inside', def.inside['url-link'] ? 'url-link' : 'punctuation', {
+							'data-uri': dataURI
+						}, def);
+					}
+					else {
+						if (def.inside['url-link']) {
+							Prism.languages.insertBefore('inside', 'url-link', {
+								'data-uri': dataURI
+							}, def);
+						} else {
+							def.inside['data-uri'] = dataURI;
+						}
+					}
+				}
+			});
+			grammar['data-uri'] = dataURI;
+		}
+	};
+
+	Prism.hooks.add('before-highlight', function (env) {
+		// Prepare the needed grammars for this code block
+		if (dataURI.pattern.test(env.code)) {
+			for (var p in dataURI.inside) {
+				if (dataURI.inside.hasOwnProperty(p)) {
+					if (!dataURI.inside[p].inside && dataURI.inside[p].pattern.test(env.code)) {
+						var lang = p.match(/^language-(.+)/)[1];
+						if (Prism.languages[lang]) {
+							dataURI.inside[p].inside = {
+								rest: autoLinkerProcess(Prism.languages[lang])
+							};
+						}
+					}
+				}
+			}
+		}
+
+		Prism.plugins.dataURIHighlight.processGrammar(env.grammar);
+	});
+}());
+
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 42 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {!function(){if(("undefined"==typeof self||self.Prism)&&("undefined"==typeof global||global.Prism)){var r={pattern:/(.)\bdata:[^\/]+\/[^,]+,(?:(?!\1)[\s\S]|\\\1)+(?=\1)/,lookbehind:!0,inside:{"language-css":{pattern:/(data:[^\/]+\/(?:[^+,]+\+)?css,)[\s\S]+/,lookbehind:!0},"language-javascript":{pattern:/(data:[^\/]+\/(?:[^+,]+\+)?javascript,)[\s\S]+/,lookbehind:!0},"language-json":{pattern:/(data:[^\/]+\/(?:[^+,]+\+)?json,)[\s\S]+/,lookbehind:!0},"language-markup":{pattern:/(data:[^\/]+\/(?:[^+,]+\+)?(?:html|xml),)[\s\S]+/,lookbehind:!0}}},e=["url","attr-value","string"];Prism.plugins.dataURIHighlight={processGrammar:function(i){i&&!i["data-uri"]&&(Prism.languages.DFS(i,function(i,a,n){-1<e.indexOf(n)&&!Array.isArray(a)&&(a.pattern||(a=this[i]={pattern:a}),a.inside=a.inside||{},"attr-value"==n?Prism.languages.insertBefore("inside",a.inside["url-link"]?"url-link":"punctuation",{"data-uri":r},a):a.inside["url-link"]?Prism.languages.insertBefore("inside","url-link",{"data-uri":r},a):a.inside["data-uri"]=r)}),i["data-uri"]=r)}},Prism.hooks.add("before-highlight",function(i){if(r.pattern.test(i.code))for(var a in r.inside)if(r.inside.hasOwnProperty(a)&&!r.inside[a].inside&&r.inside[a].pattern.test(i.code)){var n=a.match(/^language-(.+)/)[1];Prism.languages[n]&&(r.inside[a].inside={rest:(e=Prism.languages[n],Prism.plugins.autolinker&&Prism.plugins.autolinker.processGrammar(e),e)})}var e;Prism.plugins.dataURIHighlight.processGrammar(i.grammar)})}}();
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 43 */
+/***/ (function(module, exports) {
+
+(function () {
+
+	if (typeof Prism === 'undefined' || !Prism.languages['diff']) {
+		return;
+	}
+
+
+	var LANGUAGE_REGEX = /diff-([\w-]+)/i;
+	var HTML_TAG = /<\/?(?!\d)[^\s>\/=$<%]+(?:\s(?:\s*[^\s>\/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s'">=]+(?=[\s>]))|(?=[\s/>])))+)?\s*\/?>/gi;
+	//this will match a line plus the line break while ignoring the line breaks HTML tags may contain.
+	var HTML_LINE = RegExp(/(?:__|[^\r\n<])*(?:\r\n?|\n|(?:__|[^\r\n<])(?![^\r\n]))/.source.replace(/__/g, HTML_TAG.source), 'gi');
+
+	var PREFIXES = Prism.languages.diff.PREFIXES;
+
+
+	Prism.hooks.add('before-sanity-check', function (env) {
+		var lang = env.language;
+		if (LANGUAGE_REGEX.test(lang) && !env.grammar) {
+			env.grammar = Prism.languages[lang] = Prism.languages['diff'];
+		}
+	});
+	Prism.hooks.add('before-tokenize', function (env) {
+		var lang = env.language;
+		if (LANGUAGE_REGEX.test(lang) && !Prism.languages[lang]) {
+			Prism.languages[lang] = Prism.languages['diff'];
+		}
+	});
+
+	Prism.hooks.add('wrap', function (env) {
+		var diffLanguage, diffGrammar;
+
+		if (env.language !== 'diff') {
+			var langMatch = LANGUAGE_REGEX.exec(env.language);
+			if (!langMatch) {
+				return; // not a language specific diff
+			}
+
+			diffLanguage = langMatch[1];
+			diffGrammar = Prism.languages[diffLanguage];
+		}
+
+		// one of the diff tokens without any nested tokens
+		if (env.type in PREFIXES) {
+			/** @type {string} */
+			var content = env.content.replace(HTML_TAG, ''); // remove all HTML tags
+
+			/** @type {string} */
+			var decoded = content.replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+
+			// remove any one-character prefix
+			var code = decoded.replace(/(^|[\r\n])./g, '$1');
+
+			// highlight, if possible
+			var highlighted;
+			if (diffGrammar) {
+				highlighted = Prism.highlight(code, diffGrammar, diffLanguage);
+			} else {
+				highlighted = Prism.util.encode(code);
+			}
+
+			// get the HTML source of the prefix token
+			var prefixToken = new Prism.Token('prefix', PREFIXES[env.type], [/\w+/.exec(env.type)[0]]);
+			var prefix = Prism.Token.stringify(prefixToken, env.language);
+
+			// add prefix
+			var lines = [], m;
+			HTML_LINE.lastIndex = 0;
+			while (m = HTML_LINE.exec(highlighted)) {
+				lines.push(prefix + m[0]);
+			}
+			if (/(?:^|[\r\n]).$/.test(decoded)) {
+				// because both "+a\n+" and "+a\n" will map to "a\n" after the line prefixes are removed
+				lines.push(prefix);
+			}
+			env.content = lines.join('');
+
+			if (diffGrammar) {
+				env.classes.push('language-' + diffLanguage);
+			}
+		}
+	});
+
+}());
+
+
+/***/ }),
+/* 44 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof Prism&&Prism.languages.diff){var o=/diff-([\w-]+)/i,m=/<\/?(?!\d)[^\s>\/=$<%]+(?:\s(?:\s*[^\s>\/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s'">=]+(?=[\s>]))|(?=[\s/>])))+)?\s*\/?>/gi,c=RegExp("(?:__|[^\r\\n<])*(?:\r\\n?|\n|(?:__|[^\r\\n<])(?![^\r\\n]))".replace(/__/g,m.source),"gi"),d=Prism.languages.diff.PREFIXES;Prism.hooks.add("before-sanity-check",function(e){var a=e.language;o.test(a)&&!e.grammar&&(e.grammar=Prism.languages[a]=Prism.languages.diff)}),Prism.hooks.add("before-tokenize",function(e){var a=e.language;o.test(a)&&!Prism.languages[a]&&(Prism.languages[a]=Prism.languages.diff)}),Prism.hooks.add("wrap",function(e){var a,s;if("diff"!==e.language){var r=o.exec(e.language);if(!r)return;a=r[1],s=Prism.languages[a]}if(e.type in d){var n,i=e.content.replace(m,"").replace(/&lt;/g,"<").replace(/&amp;/g,"&"),g=i.replace(/(^|[\r\n])./g,"$1");n=s?Prism.highlight(g,s,a):Prism.util.encode(g);var f,t=new Prism.Token("prefix",d[e.type],[/\w+/.exec(e.type)[0]]),u=Prism.Token.stringify(t,e.language),l=[];for(c.lastIndex=0;f=c.exec(n);)l.push(u+f[0]);/(?:^|[\r\n]).$/.test(i)&&l.push(u),e.content=l.join(""),s&&e.classes.push("language-"+a)}})}}();
+
+/***/ }),
+/* 45 */
+/***/ (function(module, exports) {
+
+(function () {
+	if (typeof self === 'undefined' || !self.Prism || !self.document || !document.querySelector) {
+		return;
+	}
+
+	Prism.plugins.toolbar.registerButton('download-file', function (env) {
+		var pre = env.element.parentNode;
+		if (!pre || !/pre/i.test(pre.nodeName) || !pre.hasAttribute('data-src') || !pre.hasAttribute('data-download-link')) {
+			return;
+		}
+		var src = pre.getAttribute('data-src');
+		var a = document.createElement('a');
+		a.textContent = pre.getAttribute('data-download-link-label') || 'Download';
+		a.setAttribute('download', '');
+		a.href = src;
+		return a;
+	});
+
+})();
+
+
+/***/ }),
+/* 46 */
+/***/ (function(module, exports) {
+
+"undefined"!=typeof self&&self.Prism&&self.document&&document.querySelector&&Prism.plugins.toolbar.registerButton("download-file",function(t){var e=t.element.parentNode;if(e&&/pre/i.test(e.nodeName)&&e.hasAttribute("data-src")&&e.hasAttribute("data-download-link")){var a=e.getAttribute("data-src"),n=document.createElement("a");return n.textContent=e.getAttribute("data-download-link-label")||"Download",n.setAttribute("download",""),n.href=a,n}});
+
+/***/ }),
+/* 47 */
+/***/ (function(module, exports) {
+
+(function () {
+	if (typeof self === 'undefined' || !self.Prism || !self.document || !document.querySelector) {
+		return;
+	}
+
+	/**
+	 * @param {Element} [container=document]
+	 */
+	self.Prism.fileHighlight = function(container) {
+		container = container || document;
+
+		var Extensions = {
+			'js': 'javascript',
+			'py': 'python',
+			'rb': 'ruby',
+			'ps1': 'powershell',
+			'psm1': 'powershell',
+			'sh': 'bash',
+			'bat': 'batch',
+			'h': 'c',
+			'tex': 'latex'
+		};
+
+		Array.prototype.slice.call(container.querySelectorAll('pre[data-src]')).forEach(function (pre) {
+			// ignore if already loaded
+			if (pre.hasAttribute('data-src-loaded')) {
+				return;
+			}
+
+			// load current
+			var src = pre.getAttribute('data-src');
+
+			var language, parent = pre;
+			var lang = /\blang(?:uage)?-([\w-]+)\b/i;
+			while (parent && !lang.test(parent.className)) {
+				parent = parent.parentNode;
+			}
+
+			if (parent) {
+				language = (pre.className.match(lang) || [, ''])[1];
+			}
+
+			if (!language) {
+				var extension = (src.match(/\.(\w+)$/) || [, ''])[1];
+				language = Extensions[extension] || extension;
+			}
+
+			var code = document.createElement('code');
+			code.className = 'language-' + language;
+
+			pre.textContent = '';
+
+			code.textContent = 'Loading…';
+
+			pre.appendChild(code);
+
+			var xhr = new XMLHttpRequest();
+
+			xhr.open('GET', src, true);
+
+			xhr.onreadystatechange = function () {
+				if (xhr.readyState == 4) {
+
+					if (xhr.status < 400 && xhr.responseText) {
+						code.textContent = xhr.responseText;
+
+						Prism.highlightElement(code);
+						// mark as loaded
+						pre.setAttribute('data-src-loaded', '');
+					}
+					else if (xhr.status >= 400) {
+						code.textContent = '✖ Error ' + xhr.status + ' while fetching file: ' + xhr.statusText;
+					}
+					else {
+						code.textContent = '✖ Error: File does not exist or is empty';
+					}
+				}
+			};
+
+			xhr.send(null);
+		});
+	};
+
+	document.addEventListener('DOMContentLoaded', function () {
+		// execute inside handler, for dropping Event as argument
+		self.Prism.fileHighlight();
+	});
+
+})();
+
+
+/***/ }),
+/* 48 */
+/***/ (function(module, exports) {
+
+"undefined"!=typeof self&&self.Prism&&self.document&&document.querySelector&&(self.Prism.fileHighlight=function(e){e=e||document;var i={js:"javascript",py:"python",rb:"ruby",ps1:"powershell",psm1:"powershell",sh:"bash",bat:"batch",h:"c",tex:"latex"};Array.prototype.slice.call(e.querySelectorAll("pre[data-src]")).forEach(function(e){if(!e.hasAttribute("data-src-loaded")){for(var t,a=e.getAttribute("data-src"),s=e,n=/\blang(?:uage)?-([\w-]+)\b/i;s&&!n.test(s.className);)s=s.parentNode;if(s&&(t=(e.className.match(n)||[,""])[1]),!t){var r=(a.match(/\.(\w+)$/)||[,""])[1];t=i[r]||r}var o=document.createElement("code");o.className="language-"+t,e.textContent="",o.textContent="Loading…",e.appendChild(o);var l=new XMLHttpRequest;l.open("GET",a,!0),l.onreadystatechange=function(){4==l.readyState&&(l.status<400&&l.responseText?(o.textContent=l.responseText,Prism.highlightElement(o),e.setAttribute("data-src-loaded","")):400<=l.status?o.textContent="✖ Error "+l.status+" while fetching file: "+l.statusText:o.textContent="✖ Error: File does not exist or is empty")},l.send(null)}})},document.addEventListener("DOMContentLoaded",function(){self.Prism.fileHighlight()}));
+
+/***/ }),
+/* 49 */
+/***/ (function(module, exports) {
+
+(function () {
+
+	if (typeof self !== 'undefined' && !self.Prism) {
+		return;
+	}
+
+	// https://developer.mozilla.org/en-US/docs/Web/API/Element/matches#Polyfill
+	if (!Element.prototype.matches) {
+		Element.prototype.matches = Element.prototype.msMatchesSelector || Element.prototype.webkitMatchesSelector;
+	}
+
+	var script = Prism.util.currentScript();
+
+
+	/**
+	 * @type {Array<(element: HTMLElement) => boolean>}
+	 */
+	var filters = [];
+
+	var config = Prism.plugins.filterHighlightAll = {
+
+		/**
+		 * Adds a new filter for the elements of `highlightAll` and `highlightAllUnder` such that only elements for
+		 * which the given function returns `true` will be highlighted.
+		 *
+		 * @param {(value: { element: HTMLElement, language: string }) => boolean} condition
+		 */
+		add: function (condition) {
+			filters.push(function (element) {
+				return condition({
+					element: element,
+					language: Prism.util.getLanguage(element)
+				});
+			});
+		},
+
+		/**
+		 * Adds a new filter for the elements of `highlightAll` and `highlightAllUnder` such that only elements that
+		 * match the given CSS selection will be highlighted.
+		 *
+		 * @param {string} selector
+		 */
+		addSelector: function (selector) {
+			filters.push(function (element) {
+				return element.matches(selector);
+			});
+		},
+
+		reject: {
+
+			/**
+			 * Adds a new filter for the elements of `highlightAll` and `highlightAllUnder` such that only elements for
+			 * which the given function returns `false` will be highlighted.
+			 *
+			 * @param {(value: { element: HTMLElement, language: string }) => boolean} condition
+			 */
+			add: function (condition) {
+				filters.push(function (element) {
+					return !condition({
+						element: element,
+						language: Prism.util.getLanguage(element)
+					});
+				});
+			},
+
+			/**
+			 * Adds a new filter for the elements of `highlightAll` and `highlightAllUnder` such that only elements that do
+			 * not match the given CSS selection will be highlighted.
+			 *
+			 * @param {string} selector
+			 */
+			addSelector: function (selector) {
+				filters.push(function (element) {
+					return !element.matches(selector);
+				});
+			},
+
+		},
+
+		/**
+		 * Filters the elements of `highlightAll` and `highlightAllUnder` such that only elements with a known language
+		 * will be highlighted. All elements with an unset or unknown language will be ignored.
+		 *
+		 * __Note:__ This will effectively disable the AutoLoader plugin.
+		 *
+		 * @type {boolean}
+		 */
+		filterKnown: !!script && script.hasAttribute('data-filter-known')
+	};
+
+	config.add(function filterKnown(env) {
+		return !config.filterKnown || typeof Prism.languages[env.language] === 'object';
+	});
+
+	if (script) {
+		var attr;
+		if (attr = script.getAttribute('data-filter-selector')) {
+			config.addSelector(attr);
+		}
+		if (attr = script.getAttribute('data-reject-selector')) {
+			config.reject.addSelector(attr);
+		}
+	}
+
+	/**
+	 * Applies all filters to the given element and returns true if and only if every filter returned true on the
+	 * given element.
+	 *
+	 * @param {HTMLElement} element
+	 * @returns {boolean}
+	 */
+	function combinedFilter(element) {
+		for (var i = 0, l = filters.length; i < l; i++) {
+			if (!filters[i](element)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	Prism.hooks.add('before-all-elements-highlight', function (env) {
+		env.elements = env.elements.filter(combinedFilter);
+	});
+
+}());
+
+
+/***/ }),
+/* 50 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"==typeof self||self.Prism){Element.prototype.matches||(Element.prototype.matches=Element.prototype.msMatchesSelector||Element.prototype.webkitMatchesSelector);var e,t=Prism.util.currentScript(),r=[],n=Prism.plugins.filterHighlightAll={add:function(t){r.push(function(e){return t({element:e,language:Prism.util.getLanguage(e)})})},addSelector:function(t){r.push(function(e){return e.matches(t)})},reject:{add:function(t){r.push(function(e){return!t({element:e,language:Prism.util.getLanguage(e)})})},addSelector:function(t){r.push(function(e){return!e.matches(t)})}},filterKnown:!!t&&t.hasAttribute("data-filter-known")};if(n.add(function(e){return!n.filterKnown||"object"==typeof Prism.languages[e.language]}),t)(e=t.getAttribute("data-filter-selector"))&&n.addSelector(e),(e=t.getAttribute("data-reject-selector"))&&n.reject.addSelector(e);Prism.hooks.add("before-all-elements-highlight",function(e){e.elements=e.elements.filter(i)})}function i(e){for(var t=0,n=r.length;t<n;t++)if(!r[t](e))return!1;return!0}}();
+
+/***/ }),
+/* 51 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {(function(){
+
+if (
+	typeof self !== 'undefined' && !self.Prism ||
+	typeof global !== 'undefined' && !global.Prism
+) {
+	return;
+}
+
+Prism.hooks.add('wrap', function(env) {
+	if (env.type !== "keyword") {
+		return;
+	}
+	env.classes.push('keyword-' + env.content);
+});
+
+})();
+
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 52 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {"undefined"!=typeof self&&!self.Prism||"undefined"!=typeof global&&!global.Prism||Prism.hooks.add("wrap",function(e){"keyword"===e.type&&e.classes.push("keyword-"+e.content)});
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 53 */
+/***/ (function(module, exports) {
+
+(function () {
+
+	if (typeof self === 'undefined' || typeof Prism === 'undefined' || typeof document === 'undefined') {
+		return;
+	}
+
+	// Copied from the markup language definition
+	var HTML_TAG = /<\/?(?!\d)[^\s>\/=$<%]+(?:\s(?:\s*[^\s>\/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s'">=]+(?=[\s>]))|(?=[\s/>])))+)?\s*\/?>/g;
+
+	// the regex explained: In first lookahead we check whether the string is valid and then we use the
+	// capturing groups to split the string into its components.
+	var HEX_COLOR = /^#?(?=(?:[\da-f]{1,2}){3,4}$)([\da-f][\da-f]?)([\da-f][\da-f]?)([\da-f][\da-f]?)([\da-f][\da-f]?)?$/i;
+
+	/**
+	 * Parses the given hexadecimal representation and returns the parsed RGBA color.
+	 *
+	 * If the format of the given string is invalid, `undefined` will be returned.
+	 * Valid formats are: `RGB`, `RGBA`, `RRGGBB`, and `RRGGBBAA`.
+	 *
+	 * @param {string} hex
+	 * @returns {string | undefined}
+	 */
+	function parseHexColor(hex) {
+		var match = HEX_COLOR.exec(hex);
+		if (!match) {
+			return undefined;
+		}
+
+		// This is used to scale normalize 4bit and 8bit values
+		var scale = hex.length <= 4 ? 1 / 15 : 1 / 255;
+
+		var rgb = match.slice(1, 4).map(function (c) {
+			return String(Math.round(parseInt(c, 16) * scale * 255));
+		}).join(',');
+
+		var alpha = match[4] === undefined ? '1' : (parseInt(match[4], 16) * scale).toFixed(3);
+
+		return 'rgba(' + rgb + ',' + alpha + ')';
+	}
+
+	/**
+	 * Validates the given Color using the current browser's internal implementation.
+	 *
+	 * @param {string} color
+	 * @returns {string | undefined}
+	 */
+	function validateColor(color) {
+		var s = new Option().style;
+		s.color = color;
+		return s.color ? color : undefined;
+	}
+
+	/**
+	 * An array of function which parse a given string representation of a color.
+	 *
+	 * These parser serve as validators and as a layer of compatibility to support color formats which the browser
+	 * might not support natively.
+	 *
+	 * @type {((value: string) => (string|undefined))[]}
+	 */
+	var parsers = [
+		parseHexColor,
+		validateColor
+	];
+
+
+	Prism.hooks.add('wrap', function (env) {
+		if (env.type === 'color' || env.type === 'hexcode') {
+			var content = env.content;
+
+			// remove all HTML tags inside
+			var rawText = content.split(HTML_TAG).join('');
+
+			var color;
+			for (var i = 0, l = parsers.length; i < l && !color; i++) {
+				color = parsers[i](rawText);
+			}
+
+			if (!color) {
+				return;
+			}
+
+			var previewElement = '<span class="inline-color" style="background-color:' + color + ';"></span>';
+			env.content = previewElement + content;
+		}
+	});
+
+}());
+
+
+/***/ }),
+/* 54 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof self&&"undefined"!=typeof Prism&&"undefined"!=typeof document){var i=/<\/?(?!\d)[^\s>\/=$<%]+(?:\s(?:\s*[^\s>\/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s'">=]+(?=[\s>]))|(?=[\s/>])))+)?\s*\/?>/g,t=/^#?(?=(?:[\da-f]{1,2}){3,4}$)([\da-f][\da-f]?)([\da-f][\da-f]?)([\da-f][\da-f]?)([\da-f][\da-f]?)?$/i,d=[function(n){var e=t.exec(n);if(e){var o=n.length<=4?1/15:1/255;return"rgba("+e.slice(1,4).map(function(n){return String(Math.round(parseInt(n,16)*o*255))}).join(",")+","+(void 0===e[4]?"1":(parseInt(e[4],16)*o).toFixed(3))+")"}},function(n){var e=(new Option).style;return e.color=n,e.color?n:void 0}];Prism.hooks.add("wrap",function(n){if("color"===n.type||"hexcode"===n.type){for(var e,o=n.content,t=o.split(i).join(""),r=0,a=d.length;r<a&&!e;r++)e=d[r](t);if(!e)return;var f='<span class="inline-color" style="background-color:'+e+';"></span>';n.content=f+o}})}}();
+
+/***/ }),
+/* 55 */
+/***/ (function(module, exports) {
+
+(function () {
+	if (!self.Prism || !self.document || !document.querySelectorAll || ![].filter) return;
+
+	/**
+	 * @callback Adapter
+	 * @param {any} response
+	 * @param {HTMLPreElement} [pre]
+	 * @returns {string}
+	 */
+
+	/**
+	 * The list of adapter which will be used if `data-adapter` is not specified.
+	 *
+	 * @type {Array.<{adapter: Adapter, name: string}>}
+	 */
+	var adapters = [];
+
+	/**
+	 * Adds a new function to the list of adapters.
+	 *
+	 * If the given adapter is already registered or not a function or there is an adapter with the given name already,
+	 * nothing will happen.
+	 *
+	 * @param {Adapter} adapter The adapter to be registered.
+	 * @param {string} [name] The name of the adapter. Defaults to the function name of `adapter`.
+	 */
+	function registerAdapter(adapter, name) {
+		name = name || adapter.name;
+		if (typeof adapter === "function" && !getAdapter(adapter) && !getAdapter(name)) {
+			adapters.push({ adapter: adapter, name: name });
+		}
+	}
+	/**
+	 * Returns the given adapter itself, if registered, or a registered adapter with the given name.
+	 *
+	 * If no fitting adapter is registered, `null` will be returned.
+	 *
+	 * @param {string|Function} adapter The adapter itself or the name of an adapter.
+	 * @returns {Adapter} A registered adapter or `null`.
+	 */
+	function getAdapter(adapter) {
+		if (typeof adapter === "function") {
+			for (var i = 0, item; item = adapters[i++];) {
+				if (item.adapter.valueOf() === adapter.valueOf()) {
+					return item.adapter;
+				}
+			}
+		}
+		else if (typeof adapter === "string") {
+			for (var i = 0, item; item = adapters[i++];) {
+				if (item.name === adapter) {
+					return item.adapter;
+				}
+			}
+		}
+		return null;
+	}
+	/**
+	 * Remove the given adapter or the first registered adapter with the given name from the list of
+	 * registered adapters.
+	 *
+	 * @param {string|Function} adapter The adapter itself or the name of an adapter.
+	 */
+	function removeAdapter(adapter) {
+		if (typeof adapter === "string") {
+			adapter = getAdapter(adapter);
+		}
+		if (typeof adapter === "function") {
+			var index = adapters.map(function (item) { return item.adapter; }).indexOf(adapter);
+			if (index >= 0) {
+				adapters.splice(index, 1);
+			}
+		}
+	}
+
+	registerAdapter(function github(rsp, el) {
+		if (rsp && rsp.meta && rsp.data) {
+			if (rsp.meta.status && rsp.meta.status >= 400) {
+				return "Error: " + (rsp.data.message || rsp.meta.status);
+			}
+			else if (typeof (rsp.data.content) === "string") {
+				return typeof (atob) === "function"
+					? atob(rsp.data.content.replace(/\s/g, ""))
+					: "Your browser cannot decode base64";
+			}
+		}
+		return null;
+	}, 'github');
+	registerAdapter(function gist(rsp, el) {
+		if (rsp && rsp.meta && rsp.data && rsp.data.files) {
+			if (rsp.meta.status && rsp.meta.status >= 400) {
+				return "Error: " + (rsp.data.message || rsp.meta.status);
+			}
+
+			var files = rsp.data.files;
+			var filename = el.getAttribute("data-filename");
+			if (filename == null) {
+				// Maybe in the future we can somehow render all files
+				// But the standard <script> include for gists does that nicely already,
+				// so that might be getting beyond the scope of this plugin
+				for (var key in files) {
+					if (files.hasOwnProperty(key)) {
+						filename = key;
+						break;
+					}
+				}
+			}
+
+			if (files[filename] !== undefined) {
+				return files[filename].content;
+			}
+			return "Error: unknown or missing gist file " + filename;
+		}
+		return null;
+	}, 'gist');
+	registerAdapter(function bitbucket(rsp, el) {
+		if (rsp && rsp.node && typeof (rsp.data) === "string") {
+			return rsp.data;
+		}
+		return null;
+	}, 'bitbucket');
+
+	var jsonpcb = 0,
+		loadMsg = "Loading\u2026";
+
+	/**
+	 * Highlights all `pre` elements with an `data-jsonp` by requesting the specified JSON and using the specified adapter
+	 * or a registered adapter to extract the code to highlight from the response. The highlighted code will be inserted
+	 * into the `pre` element.
+	 */
+	function highlight() {
+		Array.prototype.slice.call(document.querySelectorAll("pre[data-jsonp]")).forEach(function (pre) {
+			pre.textContent = "";
+
+			var code = document.createElement("code");
+			code.textContent = loadMsg;
+			pre.appendChild(code);
+
+			var adapterName = pre.getAttribute("data-adapter");
+			var adapter = null;
+			if (adapterName) {
+				if (typeof window[adapterName] === "function") {
+					adapter = window[adapterName];
+				}
+				else {
+					code.textContent = "JSONP adapter function '" + adapterName + "' doesn't exist";
+					return;
+				}
+			}
+
+			var cb = "prismjsonp" + jsonpcb++;
+
+			var uri = document.createElement("a");
+			var src = uri.href = pre.getAttribute("data-jsonp");
+			uri.href += (uri.search ? "&" : "?") + (pre.getAttribute("data-callback") || "callback") + "=" + cb;
+
+			var timeout = setTimeout(function () {
+				// we could clean up window[cb], but if the request finally succeeds, keeping it around is a good thing
+				if (code.textContent === loadMsg) {
+					code.textContent = "Timeout loading '" + src + "'";
+				}
+			}, 5000);
+
+			var script = document.createElement("script");
+			script.src = uri.href;
+
+			window[cb] = function (rsp) {
+				document.head.removeChild(script);
+				clearTimeout(timeout);
+				delete window[cb];
+
+				var data = "";
+
+				if (adapter) {
+					data = adapter(rsp, pre);
+				}
+				else {
+					for (var p in adapters) {
+						data = adapters[p].adapter(rsp, pre);
+						if (data !== null) {
+							break;
+						}
+					}
+				}
+
+				if (data === null) {
+					code.textContent = "Cannot parse response (perhaps you need an adapter function?)";
+				}
+				else {
+					code.textContent = data;
+					Prism.highlightElement(code);
+				}
+			};
+
+			document.head.appendChild(script);
+		});
+	}
+
+	Prism.plugins.jsonphighlight = {
+		registerAdapter: registerAdapter,
+		removeAdapter: removeAdapter,
+		highlight: highlight
+	};
+
+	highlight();
+})();
+
+
+/***/ }),
+/* 56 */
+/***/ (function(module, exports) {
+
+!function(){if(self.Prism&&self.document&&document.querySelectorAll&&[].filter){var d=[];t(function(t,e){if(t&&t.meta&&t.data){if(t.meta.status&&400<=t.meta.status)return"Error: "+(t.data.message||t.meta.status);if("string"==typeof t.data.content)return"function"==typeof atob?atob(t.data.content.replace(/\s/g,"")):"Your browser cannot decode base64"}return null},"github"),t(function(t,e){if(t&&t.meta&&t.data&&t.data.files){if(t.meta.status&&400<=t.meta.status)return"Error: "+(t.data.message||t.meta.status);var n=t.data.files,a=e.getAttribute("data-filename");if(null==a)for(var r in n)if(n.hasOwnProperty(r)){a=r;break}return void 0!==n[a]?n[a].content:"Error: unknown or missing gist file "+a}return null},"gist"),t(function(t,e){return t&&t.node&&"string"==typeof t.data?t.data:null},"bitbucket");var s=0,l="Loading…";Prism.plugins.jsonphighlight={registerAdapter:t,removeAdapter:function(t){if("string"==typeof t&&(t=n(t)),"function"==typeof t){var e=d.map(function(t){return t.adapter}).indexOf(t);0<=e&&d.splice(e,1)}},highlight:e},e()}function t(t,e){e=e||t.name,"function"!=typeof t||n(t)||n(e)||d.push({adapter:t,name:e})}function n(t){if("function"==typeof t){for(var e=0;n=d[e++];)if(n.adapter.valueOf()===t.valueOf())return n.adapter}else if("string"==typeof t){var n;for(e=0;n=d[e++];)if(n.name===t)return n.adapter}return null}function e(){Array.prototype.slice.call(document.querySelectorAll("pre[data-jsonp]")).forEach(function(a){a.textContent="";var r=document.createElement("code");r.textContent=l,a.appendChild(r);var t=a.getAttribute("data-adapter"),o=null;if(t){if("function"!=typeof window[t])return void(r.textContent="JSONP adapter function '"+t+"' doesn't exist");o=window[t]}var i="prismjsonp"+s++,e=document.createElement("a"),n=e.href=a.getAttribute("data-jsonp");e.href+=(e.search?"&":"?")+(a.getAttribute("data-callback")||"callback")+"="+i;var u=setTimeout(function(){r.textContent===l&&(r.textContent="Timeout loading '"+n+"'")},5e3),f=document.createElement("script");f.src=e.href,window[i]=function(t){document.head.removeChild(f),clearTimeout(u),delete window[i];var e="";if(o)e=o(t,a);else for(var n in d)if(null!==(e=d[n].adapter(t,a)))break;null===e?r.textContent="Cannot parse response (perhaps you need an adapter function?)":(r.textContent=e,Prism.highlightElement(r))},document.head.appendChild(f)})}}();
+
+/***/ }),
+/* 57 */
+/***/ (function(module, exports) {
+
+(function (self, document) {
+
+	if (typeof self === 'undefined' || !self.Prism || !self.document || !document.createRange) {
+		return;
+	}
+
+	Prism.plugins.KeepMarkup = true;
+
+	Prism.hooks.add('before-highlight', function (env) {
+		if (!env.element.children.length) {
+			return;
+		}
+
+		var pos = 0;
+		var data = [];
+		var f = function (elt, baseNode) {
+			var o = {};
+			if (!baseNode) {
+				// Clone the original tag to keep all attributes
+				o.clone = elt.cloneNode(false);
+				o.posOpen = pos;
+				data.push(o);
+			}
+			for (var i = 0, l = elt.childNodes.length; i < l; i++) {
+				var child = elt.childNodes[i];
+				if (child.nodeType === 1) { // element
+					f(child);
+				} else if(child.nodeType === 3) { // text
+					pos += child.data.length;
+				}
+			}
+			if (!baseNode) {
+				o.posClose = pos;
+			}
+		};
+		f(env.element, true);
+
+		if (data && data.length) {
+			// data is an array of all existing tags
+			env.keepMarkup = data;
+		}
+	});
+
+	Prism.hooks.add('after-highlight', function (env) {
+		if(env.keepMarkup && env.keepMarkup.length) {
+
+			var walk = function (elt, nodeState) {
+				for (var i = 0, l = elt.childNodes.length; i < l; i++) {
+
+					var child = elt.childNodes[i];
+
+					if (child.nodeType === 1) { // element
+						if (!walk(child, nodeState)) {
+							return false;
+						}
+
+					} else if (child.nodeType === 3) { // text
+						if(!nodeState.nodeStart && nodeState.pos + child.data.length > nodeState.node.posOpen) {
+							// We found the start position
+							nodeState.nodeStart = child;
+							nodeState.nodeStartPos = nodeState.node.posOpen - nodeState.pos;
+						}
+						if(nodeState.nodeStart && nodeState.pos + child.data.length >= nodeState.node.posClose) {
+							// We found the end position
+							nodeState.nodeEnd = child;
+							nodeState.nodeEndPos = nodeState.node.posClose - nodeState.pos;
+						}
+
+						nodeState.pos += child.data.length;
+					}
+
+					if (nodeState.nodeStart && nodeState.nodeEnd) {
+						// Select the range and wrap it with the clone
+						var range = document.createRange();
+						range.setStart(nodeState.nodeStart, nodeState.nodeStartPos);
+						range.setEnd(nodeState.nodeEnd, nodeState.nodeEndPos);
+						nodeState.node.clone.appendChild(range.extractContents());
+						range.insertNode(nodeState.node.clone);
+						range.detach();
+
+						// Process is over
+						return false;
+					}
+				}
+				return true;
+			};
+
+			// For each tag, we walk the DOM to reinsert it
+			env.keepMarkup.forEach(function (node) {
+				walk(env.element, {
+					node: node,
+					pos: 0
+				});
+			});
+			// Store new highlightedCode for later hooks calls
+			env.highlightedCode = env.element.innerHTML;
+		}
+	});
+}(self, document));
+
+
+/***/ }),
+/* 58 */
+/***/ (function(module, exports) {
+
+!function(e,s){void 0!==e&&e.Prism&&e.document&&s.createRange&&(Prism.plugins.KeepMarkup=!0,Prism.hooks.add("before-highlight",function(e){if(e.element.children.length){var a=0,s=[],p=function(e,n){var o={};n||(o.clone=e.cloneNode(!1),o.posOpen=a,s.push(o));for(var t=0,d=e.childNodes.length;t<d;t++){var r=e.childNodes[t];1===r.nodeType?p(r):3===r.nodeType&&(a+=r.data.length)}n||(o.posClose=a)};p(e.element,!0),s&&s.length&&(e.keepMarkup=s)}}),Prism.hooks.add("after-highlight",function(n){if(n.keepMarkup&&n.keepMarkup.length){var a=function(e,n){for(var o=0,t=e.childNodes.length;o<t;o++){var d=e.childNodes[o];if(1===d.nodeType){if(!a(d,n))return!1}else 3===d.nodeType&&(!n.nodeStart&&n.pos+d.data.length>n.node.posOpen&&(n.nodeStart=d,n.nodeStartPos=n.node.posOpen-n.pos),n.nodeStart&&n.pos+d.data.length>=n.node.posClose&&(n.nodeEnd=d,n.nodeEndPos=n.node.posClose-n.pos),n.pos+=d.data.length);if(n.nodeStart&&n.nodeEnd){var r=s.createRange();return r.setStart(n.nodeStart,n.nodeStartPos),r.setEnd(n.nodeEnd,n.nodeEndPos),n.node.clone.appendChild(r.extractContents()),r.insertNode(n.node.clone),r.detach(),!1}}return!0};n.keepMarkup.forEach(function(e){a(n.element,{node:e,pos:0})}),n.highlightedCode=n.element.innerHTML}}))}(self,document);
+
+/***/ }),
+/* 59 */
+/***/ (function(module, exports) {
+
+(function () {
+
+	if (typeof self === 'undefined' || !self.Prism || !self.document || !document.querySelector) {
+		return;
+	}
+
+	function $$(expr, con) {
+		return Array.prototype.slice.call((con || document).querySelectorAll(expr));
+	}
+
+	function hasClass(element, className) {
+		className = " " + className + " ";
+		return (" " + element.className + " ").replace(/[\n\t]/g, " ").indexOf(className) > -1
+	}
+
+	function callFunction(func) {
+		func();
+	}
+
+	// Some browsers round the line-height, others don't.
+	// We need to test for it to position the elements properly.
+	var isLineHeightRounded = (function () {
+		var res;
+		return function () {
+			if (typeof res === 'undefined') {
+				var d = document.createElement('div');
+				d.style.fontSize = '13px';
+				d.style.lineHeight = '1.5';
+				d.style.padding = 0;
+				d.style.border = 0;
+				d.innerHTML = '&nbsp;<br />&nbsp;';
+				document.body.appendChild(d);
+				// Browsers that round the line-height should have offsetHeight === 38
+				// The others should have 39.
+				res = d.offsetHeight === 38;
+				document.body.removeChild(d);
+			}
+			return res;
+		}
+	}());
+
+	/**
+	 * Highlights the lines of the given pre.
+	 *
+	 * This function is split into a DOM measuring and mutate phase to improve performance.
+	 * The returned function mutates the DOM when called.
+	 *
+	 * @param {HTMLElement} pre
+	 * @param {string} [lines]
+	 * @param {string} [classes='']
+	 * @returns {() => void}
+	 */
+	function highlightLines(pre, lines, classes) {
+		lines = typeof lines === 'string' ? lines : pre.getAttribute('data-line');
+
+		var ranges = lines.replace(/\s+/g, '').split(',');
+		var offset = +pre.getAttribute('data-line-offset') || 0;
+
+		var parseMethod = isLineHeightRounded() ? parseInt : parseFloat;
+		var lineHeight = parseMethod(getComputedStyle(pre).lineHeight);
+		var hasLineNumbers = hasClass(pre, 'line-numbers');
+		var parentElement = hasLineNumbers ? pre : pre.querySelector('code') || pre;
+		var mutateActions = /** @type {(() => void)[]} */ ([]);
+
+		ranges.forEach(function (currentRange) {
+			var range = currentRange.split('-');
+
+			var start = +range[0];
+			var end = +range[1] || start;
+
+			var line = pre.querySelector('.line-highlight[data-range="' + currentRange + '"]') || document.createElement('div');
+
+			mutateActions.push(function () {
+				line.setAttribute('aria-hidden', 'true');
+				line.setAttribute('data-range', currentRange);
+				line.className = (classes || '') + ' line-highlight';
+			});
+
+			// if the line-numbers plugin is enabled, then there is no reason for this plugin to display the line numbers
+			if (hasLineNumbers && Prism.plugins.lineNumbers) {
+				var startNode = Prism.plugins.lineNumbers.getLine(pre, start);
+				var endNode = Prism.plugins.lineNumbers.getLine(pre, end);
+
+				if (startNode) {
+					var top = startNode.offsetTop + 'px';
+					mutateActions.push(function () {
+						line.style.top = top;
+					});
+				}
+
+				if (endNode) {
+					var height = (endNode.offsetTop - startNode.offsetTop) + endNode.offsetHeight + 'px';
+					mutateActions.push(function () {
+						line.style.height = height;
+					});
+				}
+			} else {
+				mutateActions.push(function () {
+					line.setAttribute('data-start', start);
+
+					if (end > start) {
+						line.setAttribute('data-end', end);
+					}
+
+					line.style.top = (start - offset - 1) * lineHeight + 'px';
+
+					line.textContent = new Array(end - start + 2).join(' \n');
+				});
+			}
+
+			mutateActions.push(function () {
+				// allow this to play nicely with the line-numbers plugin
+				// need to attack to pre as when line-numbers is enabled, the code tag is relatively which screws up the positioning
+				parentElement.appendChild(line);
+			});
+		});
+
+		return function () {
+			mutateActions.forEach(callFunction);
+		};
+	}
+
+	function applyHash() {
+		var hash = location.hash.slice(1);
+
+		// Remove pre-existing temporary lines
+		$$('.temporary.line-highlight').forEach(function (line) {
+			line.parentNode.removeChild(line);
+		});
+
+		var range = (hash.match(/\.([\d,-]+)$/) || [, ''])[1];
+
+		if (!range || document.getElementById(hash)) {
+			return;
+		}
+
+		var id = hash.slice(0, hash.lastIndexOf('.')),
+			pre = document.getElementById(id);
+
+		if (!pre) {
+			return;
+		}
+
+		if (!pre.hasAttribute('data-line')) {
+			pre.setAttribute('data-line', '');
+		}
+
+		var mutateDom = highlightLines(pre, range, 'temporary ');
+		mutateDom();
+
+		document.querySelector('.temporary.line-highlight').scrollIntoView();
+	}
+
+	var fakeTimer = 0; // Hack to limit the number of times applyHash() runs
+
+	Prism.hooks.add('before-sanity-check', function (env) {
+		var pre = env.element.parentNode;
+		var lines = pre && pre.getAttribute('data-line');
+
+		if (!pre || !lines || !/pre/i.test(pre.nodeName)) {
+			return;
+		}
+
+		/*
+		 * Cleanup for other plugins (e.g. autoloader).
+		 *
+		 * Sometimes <code> blocks are highlighted multiple times. It is necessary
+		 * to cleanup any left-over tags, because the whitespace inside of the <div>
+		 * tags change the content of the <code> tag.
+		 */
+		var num = 0;
+		$$('.line-highlight', pre).forEach(function (line) {
+			num += line.textContent.length;
+			line.parentNode.removeChild(line);
+		});
+		// Remove extra whitespace
+		if (num && /^( \n)+$/.test(env.code.slice(-num))) {
+			env.code = env.code.slice(0, -num);
+		}
+	});
+
+	Prism.hooks.add('complete', function completeHook(env) {
+		var pre = env.element.parentNode;
+		var lines = pre && pre.getAttribute('data-line');
+
+		if (!pre || !lines || !/pre/i.test(pre.nodeName)) {
+			return;
+		}
+
+		clearTimeout(fakeTimer);
+
+		var hasLineNumbers = Prism.plugins.lineNumbers;
+		var isLineNumbersLoaded = env.plugins && env.plugins.lineNumbers;
+
+		if (hasClass(pre, 'line-numbers') && hasLineNumbers && !isLineNumbersLoaded) {
+			Prism.hooks.add('line-numbers', completeHook);
+		} else {
+			var mutateDom = highlightLines(pre, lines);
+			mutateDom();
+			fakeTimer = setTimeout(applyHash, 1);
+		}
+	});
+
+	window.addEventListener('hashchange', applyHash);
+	window.addEventListener('resize', function () {
+		var actions = [];
+		$$('pre[data-line]').forEach(function (pre) {
+			actions.push(highlightLines(pre));
+		});
+		actions.forEach(callFunction);
+	});
+
+})();
+
+
+/***/ }),
+/* 60 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof self&&self.Prism&&self.document&&document.querySelector){var t,n=function(){if(void 0===t){var e=document.createElement("div");e.style.fontSize="13px",e.style.lineHeight="1.5",e.style.padding=0,e.style.border=0,e.innerHTML="&nbsp;<br />&nbsp;",document.body.appendChild(e),t=38===e.offsetHeight,document.body.removeChild(e)}return t},a=0;Prism.hooks.add("before-sanity-check",function(e){var t=e.element.parentNode,n=t&&t.getAttribute("data-line");if(t&&n&&/pre/i.test(t.nodeName)){var i=0;r(".line-highlight",t).forEach(function(e){i+=e.textContent.length,e.parentNode.removeChild(e)}),i&&/^( \n)+$/.test(e.code.slice(-i))&&(e.code=e.code.slice(0,-i))}}),Prism.hooks.add("complete",function e(t){var n=t.element.parentNode,i=n&&n.getAttribute("data-line");if(n&&i&&/pre/i.test(n.nodeName)){clearTimeout(a);var r=Prism.plugins.lineNumbers,o=t.plugins&&t.plugins.lineNumbers;if(l(n,"line-numbers")&&r&&!o)Prism.hooks.add("line-numbers",e);else s(n,i)(),a=setTimeout(u,1)}}),window.addEventListener("hashchange",u),window.addEventListener("resize",function(){var t=[];r("pre[data-line]").forEach(function(e){t.push(s(e))}),t.forEach(i)})}function r(e,t){return Array.prototype.slice.call((t||document).querySelectorAll(e))}function l(e,t){return t=" "+t+" ",-1<(" "+e.className+" ").replace(/[\n\t]/g," ").indexOf(t)}function i(e){e()}function s(u,e,d){var t=(e="string"==typeof e?e:u.getAttribute("data-line")).replace(/\s+/g,"").split(","),c=+u.getAttribute("data-line-offset")||0,f=(n()?parseInt:parseFloat)(getComputedStyle(u).lineHeight),h=l(u,"line-numbers"),p=h?u:u.querySelector("code")||u,m=[];return t.forEach(function(e){var t=e.split("-"),n=+t[0],i=+t[1]||n,r=u.querySelector('.line-highlight[data-range="'+e+'"]')||document.createElement("div");if(m.push(function(){r.setAttribute("aria-hidden","true"),r.setAttribute("data-range",e),r.className=(d||"")+" line-highlight"}),h&&Prism.plugins.lineNumbers){var o=Prism.plugins.lineNumbers.getLine(u,n),a=Prism.plugins.lineNumbers.getLine(u,i);if(o){var l=o.offsetTop+"px";m.push(function(){r.style.top=l})}if(a){var s=a.offsetTop-o.offsetTop+a.offsetHeight+"px";m.push(function(){r.style.height=s})}}else m.push(function(){r.setAttribute("data-start",n),n<i&&r.setAttribute("data-end",i),r.style.top=(n-c-1)*f+"px",r.textContent=new Array(i-n+2).join(" \n")});m.push(function(){p.appendChild(r)})}),function(){m.forEach(i)}}function u(){var e=location.hash.slice(1);r(".temporary.line-highlight").forEach(function(e){e.parentNode.removeChild(e)});var t=(e.match(/\.([\d,-]+)$/)||[,""])[1];if(t&&!document.getElementById(e)){var n=e.slice(0,e.lastIndexOf(".")),i=document.getElementById(n);if(i)i.hasAttribute("data-line")||i.setAttribute("data-line",""),s(i,t,"temporary ")(),document.querySelector(".temporary.line-highlight").scrollIntoView()}}}();
+
+/***/ }),
+/* 61 */
+/***/ (function(module, exports) {
+
+(function () {
+
+	if (typeof self === 'undefined' || !self.Prism || !self.document) {
+		return;
+	}
+
+	/**
+	 * Plugin name which is used as a class name for <pre> which is activating the plugin
+	 * @type {String}
+	 */
+	var PLUGIN_NAME = 'line-numbers';
+
+	/**
+	 * Regular expression used for determining line breaks
+	 * @type {RegExp}
+	 */
+	var NEW_LINE_EXP = /\n(?!$)/g;
+
+	/**
+	 * Resizes line numbers spans according to height of line of code
+	 * @param {Element} element <pre> element
+	 */
+	var _resizeElement = function (element) {
+		var codeStyles = getStyles(element);
+		var whiteSpace = codeStyles['white-space'];
+
+		if (whiteSpace === 'pre-wrap' || whiteSpace === 'pre-line') {
+			var codeElement = element.querySelector('code');
+			var lineNumbersWrapper = element.querySelector('.line-numbers-rows');
+			var lineNumberSizer = element.querySelector('.line-numbers-sizer');
+			var codeLines = codeElement.textContent.split(NEW_LINE_EXP);
+
+			if (!lineNumberSizer) {
+				lineNumberSizer = document.createElement('span');
+				lineNumberSizer.className = 'line-numbers-sizer';
+
+				codeElement.appendChild(lineNumberSizer);
+			}
+
+			lineNumberSizer.style.display = 'block';
+
+			codeLines.forEach(function (line, lineNumber) {
+				lineNumberSizer.textContent = line || '\n';
+				var lineSize = lineNumberSizer.getBoundingClientRect().height;
+				lineNumbersWrapper.children[lineNumber].style.height = lineSize + 'px';
+			});
+
+			lineNumberSizer.textContent = '';
+			lineNumberSizer.style.display = 'none';
+		}
+	};
+
+	/**
+	 * Returns style declarations for the element
+	 * @param {Element} element
+	 */
+	var getStyles = function (element) {
+		if (!element) {
+			return null;
+		}
+
+		return window.getComputedStyle ? getComputedStyle(element) : (element.currentStyle || null);
+	};
+
+	window.addEventListener('resize', function () {
+		Array.prototype.forEach.call(document.querySelectorAll('pre.' + PLUGIN_NAME), _resizeElement);
+	});
+
+	Prism.hooks.add('complete', function (env) {
+		if (!env.code) {
+			return;
+		}
+
+		var code = env.element;
+		var pre = code.parentNode;
+
+		// works only for <code> wrapped inside <pre> (not inline)
+		if (!pre || !/pre/i.test(pre.nodeName)) {
+			return;
+		}
+
+		// Abort if line numbers already exists
+		if (code.querySelector('.line-numbers-rows')) {
+			return;
+		}
+
+		var addLineNumbers = false;
+		var lineNumbersRegex = /(?:^|\s)line-numbers(?:\s|$)/;
+
+		for (var element = code; element; element = element.parentNode) {
+			if (lineNumbersRegex.test(element.className)) {
+				addLineNumbers = true;
+				break;
+			}
+		}
+
+		// only add line numbers if <code> or one of its ancestors has the `line-numbers` class
+		if (!addLineNumbers) {
+			return;
+		}
+
+		// Remove the class 'line-numbers' from the <code>
+		code.className = code.className.replace(lineNumbersRegex, ' ');
+		// Add the class 'line-numbers' to the <pre>
+		if (!lineNumbersRegex.test(pre.className)) {
+			pre.className += ' line-numbers';
+		}
+
+		var match = env.code.match(NEW_LINE_EXP);
+		var linesNum = match ? match.length + 1 : 1;
+		var lineNumbersWrapper;
+
+		var lines = new Array(linesNum + 1).join('<span></span>');
+
+		lineNumbersWrapper = document.createElement('span');
+		lineNumbersWrapper.setAttribute('aria-hidden', 'true');
+		lineNumbersWrapper.className = 'line-numbers-rows';
+		lineNumbersWrapper.innerHTML = lines;
+
+		if (pre.hasAttribute('data-start')) {
+			pre.style.counterReset = 'linenumber ' + (parseInt(pre.getAttribute('data-start'), 10) - 1);
+		}
+
+		env.element.appendChild(lineNumbersWrapper);
+
+		_resizeElement(pre);
+
+		Prism.hooks.run('line-numbers', env);
+	});
+
+	Prism.hooks.add('line-numbers', function (env) {
+		env.plugins = env.plugins || {};
+		env.plugins.lineNumbers = true;
+	});
+
+	/**
+	 * Global exports
+	 */
+	Prism.plugins.lineNumbers = {
+		/**
+		 * Get node for provided line number
+		 * @param {Element} element pre element
+		 * @param {Number} number line number
+		 * @return {Element|undefined}
+		 */
+		getLine: function (element, number) {
+			if (element.tagName !== 'PRE' || !element.classList.contains(PLUGIN_NAME)) {
+				return;
+			}
+
+			var lineNumberRows = element.querySelector('.line-numbers-rows');
+			var lineNumberStart = parseInt(element.getAttribute('data-start'), 10) || 1;
+			var lineNumberEnd = lineNumberStart + (lineNumberRows.children.length - 1);
+
+			if (number < lineNumberStart) {
+				number = lineNumberStart;
+			}
+			if (number > lineNumberEnd) {
+				number = lineNumberEnd;
+			}
+
+			var lineIndex = number - lineNumberStart;
+
+			return lineNumberRows.children[lineIndex];
+		}
+	};
+
+}());
+
+
+/***/ }),
+/* 62 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof self&&self.Prism&&self.document){var l="line-numbers",c=/\n(?!$)/g,m=function(e){var t=a(e)["white-space"];if("pre-wrap"===t||"pre-line"===t){var n=e.querySelector("code"),r=e.querySelector(".line-numbers-rows"),s=e.querySelector(".line-numbers-sizer"),i=n.textContent.split(c);s||((s=document.createElement("span")).className="line-numbers-sizer",n.appendChild(s)),s.style.display="block",i.forEach(function(e,t){s.textContent=e||"\n";var n=s.getBoundingClientRect().height;r.children[t].style.height=n+"px"}),s.textContent="",s.style.display="none"}},a=function(e){return e?window.getComputedStyle?getComputedStyle(e):e.currentStyle||null:null};window.addEventListener("resize",function(){Array.prototype.forEach.call(document.querySelectorAll("pre."+l),m)}),Prism.hooks.add("complete",function(e){if(e.code){var t=e.element,n=t.parentNode;if(n&&/pre/i.test(n.nodeName)&&!t.querySelector(".line-numbers-rows")){for(var r=!1,s=/(?:^|\s)line-numbers(?:\s|$)/,i=t;i;i=i.parentNode)if(s.test(i.className)){r=!0;break}if(r){t.className=t.className.replace(s," "),s.test(n.className)||(n.className+=" line-numbers");var l,a=e.code.match(c),o=a?a.length+1:1,u=new Array(o+1).join("<span></span>");(l=document.createElement("span")).setAttribute("aria-hidden","true"),l.className="line-numbers-rows",l.innerHTML=u,n.hasAttribute("data-start")&&(n.style.counterReset="linenumber "+(parseInt(n.getAttribute("data-start"),10)-1)),e.element.appendChild(l),m(n),Prism.hooks.run("line-numbers",e)}}}}),Prism.hooks.add("line-numbers",function(e){e.plugins=e.plugins||{},e.plugins.lineNumbers=!0}),Prism.plugins.lineNumbers={getLine:function(e,t){if("PRE"===e.tagName&&e.classList.contains(l)){var n=e.querySelector(".line-numbers-rows"),r=parseInt(e.getAttribute("data-start"),10)||1,s=r+(n.children.length-1);t<r&&(t=r),s<t&&(t=s);var i=t-r;return n.children[i]}}}}}();
+
+/***/ }),
+/* 63 */
+/***/ (function(module, exports) {
+
+(function () {
+
+	if (typeof self === 'undefined' || !self.Prism || !self.document) {
+		return;
+	}
+
+	var MATCH_ALL_CLASS = /(?:^|\s)match-braces(?:\s|$)/;
+
+	var BRACE_HOVER_CLASS = /(?:^|\s)brace-hover(?:\s|$)/;
+	var BRACE_SELECTED_CLASS = /(?:^|\s)brace-selected(?:\s|$)/;
+
+	var NO_BRACE_HOVER_CLASS = /(?:^|\s)no-brace-hover(?:\s|$)/;
+	var NO_BRACE_SELECT_CLASS = /(?:^|\s)no-brace-select(?:\s|$)/;
+
+	var PARTNER = {
+		'(': ')',
+		'[': ']',
+		'{': '}',
+	};
+
+	var NAMES = {
+		'(': 'brace-round',
+		'[': 'brace-square',
+		'{': 'brace-curly',
+	};
+
+	var LEVEL_WARP = 12;
+
+	var pairIdCounter = 0;
+
+	var BRACE_ID_PATTERN = /^(pair-\d+-)(open|close)$/;
+
+	/**
+	 * Returns the brace partner given one brace of a brace pair.
+	 *
+	 * @param {HTMLElement} brace
+	 * @returns {HTMLElement}
+	 */
+	function getPartnerBrace(brace) {
+		var match = BRACE_ID_PATTERN.exec(brace.id);
+		return document.querySelector('#' + match[1] + (match[2] == 'open' ? 'close' : 'open'));
+	}
+
+	/**
+	 * @this {HTMLElement}
+	 */
+	function hoverBrace() {
+		for (var parent = this.parentElement; parent; parent = parent.parentElement) {
+			if (NO_BRACE_HOVER_CLASS.test(parent.className)) {
+				return;
+			}
+		}
+
+		[this, getPartnerBrace(this)].forEach(function (ele) {
+			ele.className = (ele.className.replace(BRACE_HOVER_CLASS, ' ') + ' brace-hover').replace(/\s+/g, ' ');
+		});
+	}
+	/**
+	 * @this {HTMLElement}
+	 */
+	function leaveBrace() {
+		[this, getPartnerBrace(this)].forEach(function (ele) {
+			ele.className = ele.className.replace(BRACE_HOVER_CLASS, ' ');
+		});
+	}
+	/**
+	 * @this {HTMLElement}
+	 */
+	function clickBrace() {
+		for (var parent = this.parentElement; parent; parent = parent.parentElement) {
+			if (NO_BRACE_SELECT_CLASS.test(parent.className)) {
+				return;
+			}
+		}
+
+		[this, getPartnerBrace(this)].forEach(function (ele) {
+			ele.className = (ele.className.replace(BRACE_SELECTED_CLASS, ' ') + ' brace-selected').replace(/\s+/g, ' ');
+		});
+	}
+
+	Prism.hooks.add('complete', function (env) {
+
+		/** @type {HTMLElement} */
+		var code = env.element;
+		var pre = code.parentElement;
+
+		if (!pre || pre.tagName != 'PRE') {
+			return;
+		}
+
+		// find the braces to match
+		/** @type {string[]} */
+		var toMatch = [];
+		for (var ele = code; ele; ele = ele.parentElement) {
+			if (MATCH_ALL_CLASS.test(ele.className)) {
+				toMatch.push('(', '[', '{');
+				break;
+			}
+		}
+
+		if (toMatch.length == 0) {
+			// nothing to match
+			return;
+		}
+
+		if (!pre.__listenerAdded) {
+			// code blocks might be highlighted more than once
+			pre.addEventListener('mousedown', function removeBraceSelected() {
+				// the code element might have been replaced
+				var code = pre.querySelector('code');
+				Array.prototype.slice.call(code.querySelectorAll('.brace-selected')).forEach(function (element) {
+					element.className = element.className.replace(BRACE_SELECTED_CLASS, ' ');
+				});
+			});
+			Object.defineProperty(pre, '__listenerAdded', { value: true });
+		}
+
+		/** @type {HTMLSpanElement[]} */
+		var punctuation = Array.prototype.slice.call(code.querySelectorAll('span.token.punctuation'));
+
+		/** @type {{ index: number, open: boolean, element: HTMLElement }[]} */
+		var allBraces = [];
+
+		toMatch.forEach(function (open) {
+			var close = PARTNER[open];
+			var name = NAMES[open];
+
+			/** @type {[number, number][]} */
+			var pairs = [];
+			/** @type {number[]} */
+			var openStack = [];
+
+			for (var i = 0; i < punctuation.length; i++) {
+				var element = punctuation[i];
+				if (element.childElementCount == 0) {
+					var text = element.textContent;
+					if (text === open) {
+						allBraces.push({ index: i, open: true, element: element });
+						element.className += ' ' + name;
+						element.className += ' brace-open';
+						openStack.push(i);
+					} else if (text === close) {
+						allBraces.push({ index: i, open: false, element: element });
+						element.className += ' ' + name;
+						element.className += ' brace-close';
+						if (openStack.length) {
+							pairs.push([i, openStack.pop()]);
+						}
+					}
+				}
+			}
+
+			pairs.forEach(function (pair) {
+				var pairId = 'pair-' + (pairIdCounter++) + '-';
+
+				var openEle = punctuation[pair[0]];
+				var closeEle = punctuation[pair[1]];
+
+				openEle.id = pairId + 'open';
+				closeEle.id = pairId + 'close';
+
+				[openEle, closeEle].forEach(function (ele) {
+					ele.addEventListener('mouseenter', hoverBrace);
+					ele.addEventListener('mouseleave', leaveBrace);
+					ele.addEventListener('click', clickBrace);
+				});
+			});
+		});
+
+		var level = 0;
+		allBraces.sort(function (a, b) { return a.index - b.index; });
+		allBraces.forEach(function (brace) {
+			if (brace.open) {
+				brace.element.className += ' brace-level-' + (level % LEVEL_WARP + 1);
+				level++;
+			} else {
+				level = Math.max(0, level - 1);
+				brace.element.className += ' brace-level-' + (level % LEVEL_WARP + 1);
+			}
+		});
+
+	});
+
+}());
+
+
+/***/ }),
+/* 64 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof self&&self.Prism&&self.document){var c=/(?:^|\s)match-braces(?:\s|$)/,a=/(?:^|\s)brace-hover(?:\s|$)/,l=/(?:^|\s)brace-selected(?:\s|$)/,n=/(?:^|\s)no-brace-hover(?:\s|$)/,t=/(?:^|\s)no-brace-select(?:\s|$)/,u={"(":")","[":"]","{":"}"},f={"(":"brace-round","[":"brace-square","{":"brace-curly"},m=0,r=/^(pair-\d+-)(open|close)$/;Prism.hooks.add("complete",function(e){var a=e.element,n=a.parentElement;if(n&&"PRE"==n.tagName){for(var t=[],r=a;r;r=r.parentElement)if(c.test(r.className)){t.push("(","[","{");break}if(0!=t.length){n.__listenerAdded||(n.addEventListener("mousedown",function(){var e=n.querySelector("code");Array.prototype.slice.call(e.querySelectorAll(".brace-selected")).forEach(function(e){e.className=e.className.replace(l," ")})}),Object.defineProperty(n,"__listenerAdded",{value:!0}));var o=Array.prototype.slice.call(a.querySelectorAll("span.token.punctuation")),i=[];t.forEach(function(e){for(var a=u[e],n=f[e],t=[],r=[],s=0;s<o.length;s++){var c=o[s];if(0==c.childElementCount){var l=c.textContent;l===e?(i.push({index:s,open:!0,element:c}),c.className+=" "+n,c.className+=" brace-open",r.push(s)):l===a&&(i.push({index:s,open:!1,element:c}),c.className+=" "+n,c.className+=" brace-close",r.length&&t.push([s,r.pop()]))}}t.forEach(function(e){var a="pair-"+m+++"-",n=o[e[0]],t=o[e[1]];n.id=a+"open",t.id=a+"close",[n,t].forEach(function(e){e.addEventListener("mouseenter",p),e.addEventListener("mouseleave",d),e.addEventListener("click",h)})})});var s=0;i.sort(function(e,a){return e.index-a.index}),i.forEach(function(e){e.open?(e.element.className+=" brace-level-"+(s%12+1),s++):(s=Math.max(0,s-1),e.element.className+=" brace-level-"+(s%12+1))})}}})}function s(e){var a=r.exec(e.id);return document.querySelector("#"+a[1]+("open"==a[2]?"close":"open"))}function p(){for(var e=this.parentElement;e;e=e.parentElement)if(n.test(e.className))return;[this,s(this)].forEach(function(e){e.className=(e.className.replace(a," ")+" brace-hover").replace(/\s+/g," ")})}function d(){[this,s(this)].forEach(function(e){e.className=e.className.replace(a," ")})}function h(){for(var e=this.parentElement;e;e=e.parentElement)if(t.test(e.className))return;[this,s(this)].forEach(function(e){e.className=(e.className.replace(l," ")+" brace-selected").replace(/\s+/g," ")})}}();
+
+/***/ }),
+/* 65 */
+/***/ (function(module, exports) {
+
+(function() {
+
+var assign = Object.assign || function (obj1, obj2) {
+	for (var name in obj2) {
+		if (obj2.hasOwnProperty(name))
+			obj1[name] = obj2[name];
+	}
+	return obj1;
+}
+
+function NormalizeWhitespace(defaults) {
+	this.defaults = assign({}, defaults);
+}
+
+function toCamelCase(value) {
+	return value.replace(/-(\w)/g, function(match, firstChar) {
+		return firstChar.toUpperCase();
+	});
+}
+
+function tabLen(str) {
+	var res = 0;
+	for (var i = 0; i < str.length; ++i) {
+		if (str.charCodeAt(i) == '\t'.charCodeAt(0))
+			res += 3;
+	}
+	return str.length + res;
+}
+
+NormalizeWhitespace.prototype = {
+	setDefaults: function (defaults) {
+		this.defaults = assign(this.defaults, defaults);
+	},
+	normalize: function (input, settings) {
+		settings = assign(this.defaults, settings);
+
+		for (var name in settings) {
+			var methodName = toCamelCase(name);
+			if (name !== "normalize" && methodName !== 'setDefaults' &&
+					settings[name] && this[methodName]) {
+				input = this[methodName].call(this, input, settings[name]);
+			}
+		}
+
+		return input;
+	},
+
+	/*
+	 * Normalization methods
+	 */
+	leftTrim: function (input) {
+		return input.replace(/^\s+/, '');
+	},
+	rightTrim: function (input) {
+		return input.replace(/\s+$/, '');
+	},
+	tabsToSpaces: function (input, spaces) {
+		spaces = spaces|0 || 4;
+		return input.replace(/\t/g, new Array(++spaces).join(' '));
+	},
+	spacesToTabs: function (input, spaces) {
+		spaces = spaces|0 || 4;
+		return input.replace(RegExp(' {' + spaces + '}', 'g'), '\t');
+	},
+	removeTrailing: function (input) {
+		return input.replace(/\s*?$/gm, '');
+	},
+	// Support for deprecated plugin remove-initial-line-feed
+	removeInitialLineFeed: function (input) {
+		return input.replace(/^(?:\r?\n|\r)/, '');
+	},
+	removeIndent: function (input) {
+		var indents = input.match(/^[^\S\n\r]*(?=\S)/gm);
+
+		if (!indents || !indents[0].length)
+			return input;
+
+		indents.sort(function(a, b){return a.length - b.length; });
+
+		if (!indents[0].length)
+			return input;
+
+		return input.replace(RegExp('^' + indents[0], 'gm'), '');
+	},
+	indent: function (input, tabs) {
+		return input.replace(/^[^\S\n\r]*(?=\S)/gm, new Array(++tabs).join('\t') + '$&');
+	},
+	breakLines: function (input, characters) {
+		characters = (characters === true) ? 80 : characters|0 || 80;
+
+		var lines = input.split('\n');
+		for (var i = 0; i < lines.length; ++i) {
+			if (tabLen(lines[i]) <= characters)
+				continue;
+
+			var line = lines[i].split(/(\s+)/g),
+			    len = 0;
+
+			for (var j = 0; j < line.length; ++j) {
+				var tl = tabLen(line[j]);
+				len += tl;
+				if (len > characters) {
+					line[j] = '\n' + line[j];
+					len = tl;
+				}
+			}
+			lines[i] = line.join('');
+		}
+		return lines.join('\n');
+	}
+};
+
+// Support node modules
+if (typeof module !== 'undefined' && module.exports) {
+	module.exports = NormalizeWhitespace;
+}
+
+// Exit if prism is not loaded
+if (typeof Prism === 'undefined') {
+	return;
+}
+
+Prism.plugins.NormalizeWhitespace = new NormalizeWhitespace({
+	'remove-trailing': true,
+	'remove-indent': true,
+	'left-trim': true,
+	'right-trim': true,
+	/*'break-lines': 80,
+	'indent': 2,
+	'remove-initial-line-feed': false,
+	'tabs-to-spaces': 4,
+	'spaces-to-tabs': 4*/
+});
+
+Prism.hooks.add('before-sanity-check', function (env) {
+	var Normalizer = Prism.plugins.NormalizeWhitespace;
+
+	// Check settings
+	if (env.settings && env.settings['whitespace-normalization'] === false) {
+		return;
+	}
+
+	// Simple mode if there is no env.element
+	if ((!env.element || !env.element.parentNode) && env.code) {
+		env.code = Normalizer.normalize(env.code, env.settings);
+		return;
+	}
+
+	// Normal mode
+	var pre = env.element.parentNode;
+	var clsReg = /(?:^|\s)no-whitespace-normalization(?:\s|$)/;
+	if (!env.code || !pre || pre.nodeName.toLowerCase() !== 'pre' ||
+			clsReg.test(pre.className) || clsReg.test(env.element.className))
+		return;
+
+	var children = pre.childNodes,
+	    before = '',
+	    after = '',
+	    codeFound = false;
+
+	// Move surrounding whitespace from the <pre> tag into the <code> tag
+	for (var i = 0; i < children.length; ++i) {
+		var node = children[i];
+
+		if (node == env.element) {
+			codeFound = true;
+		} else if (node.nodeName === "#text") {
+			if (codeFound) {
+				after += node.nodeValue;
+			} else {
+				before += node.nodeValue;
+			}
+
+			pre.removeChild(node);
+			--i;
+		}
+	}
+
+	if (!env.element.children.length || !Prism.plugins.KeepMarkup) {
+		env.code = before + env.code + after;
+		env.code = Normalizer.normalize(env.code, env.settings);
+	} else {
+		// Preserve markup for keep-markup plugin
+		var html = before + env.element.innerHTML + after;
+		env.element.innerHTML = Normalizer.normalize(html, env.settings);
+		env.code = env.element.textContent;
+	}
+});
+
+}());
+
+
+/***/ }),
+/* 66 */
+/***/ (function(module, exports) {
+
+!function(){var i=Object.assign||function(e,n){for(var t in n)n.hasOwnProperty(t)&&(e[t]=n[t]);return e};function e(e){this.defaults=i({},e)}function l(e){for(var n=0,t=0;t<e.length;++t)e.charCodeAt(t)=="\t".charCodeAt(0)&&(n+=3);return e.length+n}e.prototype={setDefaults:function(e){this.defaults=i(this.defaults,e)},normalize:function(e,n){for(var t in n=i(this.defaults,n)){var r=t.replace(/-(\w)/g,function(e,n){return n.toUpperCase()});"normalize"!==t&&"setDefaults"!==r&&n[t]&&this[r]&&(e=this[r].call(this,e,n[t]))}return e},leftTrim:function(e){return e.replace(/^\s+/,"")},rightTrim:function(e){return e.replace(/\s+$/,"")},tabsToSpaces:function(e,n){return n=0|n||4,e.replace(/\t/g,new Array(++n).join(" "))},spacesToTabs:function(e,n){return n=0|n||4,e.replace(RegExp(" {"+n+"}","g"),"\t")},removeTrailing:function(e){return e.replace(/\s*?$/gm,"")},removeInitialLineFeed:function(e){return e.replace(/^(?:\r?\n|\r)/,"")},removeIndent:function(e){var n=e.match(/^[^\S\n\r]*(?=\S)/gm);return n&&n[0].length?(n.sort(function(e,n){return e.length-n.length}),n[0].length?e.replace(RegExp("^"+n[0],"gm"),""):e):e},indent:function(e,n){return e.replace(/^[^\S\n\r]*(?=\S)/gm,new Array(++n).join("\t")+"$&")},breakLines:function(e,n){n=!0===n?80:0|n||80;for(var t=e.split("\n"),r=0;r<t.length;++r)if(!(l(t[r])<=n)){for(var i=t[r].split(/(\s+)/g),o=0,a=0;a<i.length;++a){var s=l(i[a]);n<(o+=s)&&(i[a]="\n"+i[a],o=s)}t[r]=i.join("")}return t.join("\n")}},"undefined"!=typeof module&&module.exports&&(module.exports=e),"undefined"!=typeof Prism&&(Prism.plugins.NormalizeWhitespace=new e({"remove-trailing":!0,"remove-indent":!0,"left-trim":!0,"right-trim":!0}),Prism.hooks.add("before-sanity-check",function(e){var n=Prism.plugins.NormalizeWhitespace;if(!e.settings||!1!==e.settings["whitespace-normalization"])if(e.element&&e.element.parentNode||!e.code){var t=e.element.parentNode,r=/(?:^|\s)no-whitespace-normalization(?:\s|$)/;if(e.code&&t&&"pre"===t.nodeName.toLowerCase()&&!r.test(t.className)&&!r.test(e.element.className)){for(var i=t.childNodes,o="",a="",s=!1,l=0;l<i.length;++l){var c=i[l];c==e.element?s=!0:"#text"===c.nodeName&&(s?a+=c.nodeValue:o+=c.nodeValue,t.removeChild(c),--l)}if(e.element.children.length&&Prism.plugins.KeepMarkup){var u=o+e.element.innerHTML+a;e.element.innerHTML=n.normalize(u,e.settings),e.code=e.element.textContent}else e.code=o+e.code+a,e.code=n.normalize(e.code,e.settings)}}else e.code=n.normalize(e.code,e.settings)}))}();
+
+/***/ }),
+/* 67 */
+/***/ (function(module, exports) {
+
+(function() {
+
+	if (
+		typeof self !== 'undefined' && !self.Prism ||
+		!self.document || !Function.prototype.bind
+	) {
+		return;
+	}
+
+	var previewers = {
+		// gradient must be defined before color and angle
+		'gradient': {
+			create: (function () {
+
+				// Stores already processed gradients so that we don't
+				// make the conversion every time the previewer is shown
+				var cache = {};
+
+				/**
+				 * Returns a W3C-valid linear gradient
+				 * @param {string} prefix Vendor prefix if any ("-moz-", "-webkit-", etc.)
+				 * @param {string} func Gradient function name ("linear-gradient")
+				 * @param {string[]} values Array of the gradient function parameters (["0deg", "red 0%", "blue 100%"])
+				 */
+				var convertToW3CLinearGradient = function(prefix, func, values) {
+					// Default value for angle
+					var angle = '180deg';
+
+					if (/^(?:-?\d*\.?\d+(?:deg|rad)|to\b|top|right|bottom|left)/.test(values[0])) {
+						angle = values.shift();
+						if (angle.indexOf('to ') < 0) {
+							// Angle uses old keywords
+							// W3C syntax uses "to" + opposite keywords
+							if (angle.indexOf('top') >= 0) {
+								if (angle.indexOf('left') >= 0) {
+									angle = 'to bottom right';
+								} else if (angle.indexOf('right') >= 0) {
+									angle = 'to bottom left';
+								} else {
+									angle = 'to bottom';
+								}
+							} else if (angle.indexOf('bottom') >= 0) {
+								if (angle.indexOf('left') >= 0) {
+									angle = 'to top right';
+								} else if (angle.indexOf('right') >= 0) {
+									angle = 'to top left';
+								} else {
+									angle = 'to top';
+								}
+							} else if (angle.indexOf('left') >= 0) {
+								angle = 'to right';
+							} else if (angle.indexOf('right') >= 0) {
+								angle = 'to left';
+							} else if (prefix) {
+								// Angle is shifted by 90deg in prefixed gradients
+								if (angle.indexOf('deg') >= 0) {
+									angle = (90 - parseFloat(angle)) + 'deg';
+								} else if (angle.indexOf('rad') >= 0) {
+									angle = (Math.PI / 2 - parseFloat(angle)) + 'rad';
+								}
+							}
+						}
+					}
+
+					return func + '(' + angle + ',' + values.join(',') + ')';
+				};
+
+				/**
+				 * Returns a W3C-valid radial gradient
+				 * @param {string} prefix Vendor prefix if any ("-moz-", "-webkit-", etc.)
+				 * @param {string} func Gradient function name ("linear-gradient")
+				 * @param {string[]} values Array of the gradient function parameters (["0deg", "red 0%", "blue 100%"])
+				 */
+				var convertToW3CRadialGradient = function(prefix, func, values) {
+					if (values[0].indexOf('at') < 0) {
+						// Looks like old syntax
+
+						// Default values
+						var position = 'center';
+						var shape = 'ellipse';
+						var size = 'farthest-corner';
+
+						if (/\bcenter|top|right|bottom|left\b|^\d+/.test(values[0])) {
+							// Found a position
+							// Remove angle value, if any
+							position = values.shift().replace(/\s*-?\d+(?:rad|deg)\s*/, '');
+						}
+						if (/\bcircle|ellipse|closest|farthest|contain|cover\b/.test(values[0])) {
+							// Found a shape and/or size
+							var shapeSizeParts = values.shift().split(/\s+/);
+							if (shapeSizeParts[0] && (shapeSizeParts[0] === 'circle' || shapeSizeParts[0] === 'ellipse')) {
+								shape = shapeSizeParts.shift();
+							}
+							if (shapeSizeParts[0]) {
+								size = shapeSizeParts.shift();
+							}
+
+							// Old keywords are converted to their synonyms
+							if (size === 'cover') {
+								size = 'farthest-corner';
+							} else if (size === 'contain') {
+								size = 'clothest-side';
+							}
+						}
+
+						return func + '(' + shape + ' ' + size + ' at ' + position + ',' + values.join(',') + ')';
+					}
+					return func + '(' + values.join(',') + ')';
+				};
+
+				/**
+				 * Converts a gradient to a W3C-valid one
+				 * Does not support old webkit syntax (-webkit-gradient(linear...) and -webkit-gradient(radial...))
+				 * @param {string} gradient The CSS gradient
+				 */
+				var convertToW3CGradient = function(gradient) {
+					if (cache[gradient]) {
+						return cache[gradient];
+					}
+					var parts = gradient.match(/^(\b|\B-[a-z]{1,10}-)((?:repeating-)?(?:linear|radial)-gradient)/);
+					// "", "-moz-", etc.
+					var prefix = parts && parts[1];
+					// "linear-gradient", "radial-gradient", etc.
+					var func = parts && parts[2];
+
+					var values = gradient.replace(/^(?:\b|\B-[a-z]{1,10}-)(?:repeating-)?(?:linear|radial)-gradient\(|\)$/g, '').split(/\s*,\s*/);
+
+					if (func.indexOf('linear') >= 0) {
+						return cache[gradient] = convertToW3CLinearGradient(prefix, func, values);
+					} else if (func.indexOf('radial') >= 0) {
+						return cache[gradient] = convertToW3CRadialGradient(prefix, func, values);
+					}
+					return cache[gradient] = func + '(' + values.join(',') + ')';
+				};
+
+				return function () {
+					new Prism.plugins.Previewer('gradient', function(value) {
+						this.firstChild.style.backgroundImage = '';
+						this.firstChild.style.backgroundImage = convertToW3CGradient(value);
+						return !!this.firstChild.style.backgroundImage;
+					}, '*', function () {
+						this._elt.innerHTML = '<div></div>';
+					});
+				};
+			}()),
+			tokens: {
+				'gradient': {
+					pattern: /(?:\b|\B-[a-z]{1,10}-)(?:repeating-)?(?:linear|radial)-gradient\((?:(?:rgb|hsl)a?\(.+?\)|[^\)])+\)/gi,
+					inside: {
+						'function': /[\w-]+(?=\()/,
+						'punctuation': /[(),]/
+					}
+				}
+			},
+			languages: {
+				'css': true,
+				'less': true,
+				'sass': [
+					{
+						lang: 'sass',
+						before: 'punctuation',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['variable-line']
+					},
+					{
+						lang: 'sass',
+						before: 'punctuation',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['property-line']
+					}
+				],
+				'scss': true,
+				'stylus': [
+					{
+						lang: 'stylus',
+						before: 'func',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['property-declaration'].inside
+					},
+					{
+						lang: 'stylus',
+						before: 'func',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['variable-declaration'].inside
+					}
+				]
+			}
+		},
+		'angle': {
+			create: function () {
+				new Prism.plugins.Previewer('angle', function(value) {
+					var num = parseFloat(value);
+					var unit = value.match(/[a-z]+$/i);
+					var max, percentage;
+					if (!num || !unit) {
+						return false;
+					}
+					unit = unit[0];
+
+					switch(unit) {
+						case 'deg':
+							max = 360;
+							break;
+						case 'grad':
+							max = 400;
+							break;
+						case 'rad':
+							max = 2 * Math.PI;
+							break;
+						case 'turn':
+							max = 1;
+					}
+
+					percentage = 100 * num/max;
+					percentage %= 100;
+
+					this[(num < 0? 'set' : 'remove') + 'Attribute']('data-negative', '');
+					this.querySelector('circle').style.strokeDasharray = Math.abs(percentage) + ',500';
+					return true;
+				}, '*', function () {
+					this._elt.innerHTML = '<svg viewBox="0 0 64 64">' +
+						'<circle r="16" cy="32" cx="32"></circle>' +
+						'</svg>';
+				});
+			},
+			tokens: {
+				'angle': /(?:\b|\B-|(?=\B\.))\d*\.?\d+(?:deg|g?rad|turn)\b/i
+			},
+			languages: {
+				'css': true,
+				'less': true,
+				'markup': {
+					lang: 'markup',
+					before: 'punctuation',
+					inside: 'inside',
+					root: Prism.languages.markup && Prism.languages.markup['tag'].inside['attr-value']
+				},
+				'sass': [
+					{
+						lang: 'sass',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['property-line']
+					},
+					{
+						lang: 'sass',
+						before: 'operator',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['variable-line']
+					}
+				],
+				'scss': true,
+				'stylus': [
+					{
+						lang: 'stylus',
+						before: 'func',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['property-declaration'].inside
+					},
+					{
+						lang: 'stylus',
+						before: 'func',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['variable-declaration'].inside
+					}
+				]
+			}
+		},
+		'color': {
+			create: function () {
+				new Prism.plugins.Previewer('color', function(value) {
+					this.style.backgroundColor = '';
+					this.style.backgroundColor = value;
+					return !!this.style.backgroundColor;
+				});
+			},
+			tokens: {
+				'color': [Prism.languages.css['hexcode']].concat(Prism.languages.css['color'])
+			},
+			languages: {
+				// CSS extras is required, so css and scss are not necessary
+				'css': false,
+				'less': true,
+				'markup': {
+					lang: 'markup',
+					before: 'punctuation',
+					inside: 'inside',
+					root: Prism.languages.markup && Prism.languages.markup['tag'].inside['attr-value']
+				},
+				'sass': [
+					{
+						lang: 'sass',
+						before: 'punctuation',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['variable-line']
+					},
+					{
+						lang: 'sass',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['property-line']
+					}
+				],
+				'scss': false,
+				'stylus': [
+					{
+						lang: 'stylus',
+						before: 'hexcode',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['property-declaration'].inside
+					},
+					{
+						lang: 'stylus',
+						before: 'hexcode',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['variable-declaration'].inside
+					}
+				]
+			}
+		},
+		'easing': {
+			create: function () {
+				new Prism.plugins.Previewer('easing', function (value) {
+
+					value = {
+						'linear': '0,0,1,1',
+						'ease': '.25,.1,.25,1',
+						'ease-in': '.42,0,1,1',
+						'ease-out': '0,0,.58,1',
+						'ease-in-out':'.42,0,.58,1'
+					}[value] || value;
+
+					var p = value.match(/-?\d*\.?\d+/g);
+
+					if(p.length === 4) {
+						p = p.map(function(p, i) { return (i % 2? 1 - p : p) * 100; });
+
+						this.querySelector('path').setAttribute('d', 'M0,100 C' + p[0] + ',' + p[1] + ', ' + p[2] + ',' + p[3] + ', 100,0');
+
+						var lines = this.querySelectorAll('line');
+						lines[0].setAttribute('x2', p[0]);
+						lines[0].setAttribute('y2', p[1]);
+						lines[1].setAttribute('x2', p[2]);
+						lines[1].setAttribute('y2', p[3]);
+
+						return true;
+					}
+
+					return false;
+				}, '*', function () {
+					this._elt.innerHTML = '<svg viewBox="-20 -20 140 140" width="100" height="100">' +
+						'<defs>' +
+						'<marker id="prism-previewer-easing-marker" viewBox="0 0 4 4" refX="2" refY="2" markerUnits="strokeWidth">' +
+						'<circle cx="2" cy="2" r="1.5" />' +
+						'</marker>' +
+						'</defs>' +
+						'<path d="M0,100 C20,50, 40,30, 100,0" />' +
+						'<line x1="0" y1="100" x2="20" y2="50" marker-start="url(' + location.href + '#prism-previewer-easing-marker)" marker-end="url(' + location.href + '#prism-previewer-easing-marker)" />' +
+						'<line x1="100" y1="0" x2="40" y2="30" marker-start="url(' + location.href + '#prism-previewer-easing-marker)" marker-end="url(' + location.href + '#prism-previewer-easing-marker)" />' +
+						'</svg>';
+				});
+			},
+			tokens: {
+				'easing': {
+					pattern: /\bcubic-bezier\((?:-?\d*\.?\d+,\s*){3}-?\d*\.?\d+\)\B|\b(?:linear|ease(?:-in)?(?:-out)?)(?=\s|[;}]|$)/i,
+					inside: {
+						'function': /[\w-]+(?=\()/,
+						'punctuation': /[(),]/
+					}
+				}
+			},
+			languages: {
+				'css': true,
+				'less': true,
+				'sass': [
+					{
+						lang: 'sass',
+						inside: 'inside',
+						before: 'punctuation',
+						root: Prism.languages.sass && Prism.languages.sass['variable-line']
+					},
+					{
+						lang: 'sass',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['property-line']
+					}
+				],
+				'scss': true,
+				'stylus': [
+					{
+						lang: 'stylus',
+						before: 'hexcode',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['property-declaration'].inside
+					},
+					{
+						lang: 'stylus',
+						before: 'hexcode',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['variable-declaration'].inside
+					}
+				]
+			}
+		},
+
+		'time': {
+			create: function () {
+				new Prism.plugins.Previewer('time', function(value) {
+					var num = parseFloat(value);
+					var unit = value.match(/[a-z]+$/i);
+					if (!num || !unit) {
+						return false;
+					}
+					unit = unit[0];
+					this.querySelector('circle').style.animationDuration = 2 * num + unit;
+					return true;
+				}, '*', function () {
+					this._elt.innerHTML = '<svg viewBox="0 0 64 64">' +
+						'<circle r="16" cy="32" cx="32"></circle>' +
+						'</svg>';
+				});
+			},
+			tokens: {
+				'time': /(?:\b|\B-|(?=\B\.))\d*\.?\d+m?s\b/i
+			},
+			languages: {
+				'css': true,
+				'less': true,
+				'markup': {
+					lang: 'markup',
+					before: 'punctuation',
+					inside: 'inside',
+					root: Prism.languages.markup && Prism.languages.markup['tag'].inside['attr-value']
+				},
+				'sass': [
+					{
+						lang: 'sass',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['property-line']
+					},
+					{
+						lang: 'sass',
+						before: 'operator',
+						inside: 'inside',
+						root: Prism.languages.sass && Prism.languages.sass['variable-line']
+					}
+				],
+				'scss': true,
+				'stylus': [
+					{
+						lang: 'stylus',
+						before: 'hexcode',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['property-declaration'].inside
+					},
+					{
+						lang: 'stylus',
+						before: 'hexcode',
+						inside: 'rest',
+						root: Prism.languages.stylus && Prism.languages.stylus['variable-declaration'].inside
+					}
+				]
+			}
+		}
+	};
+
+	/**
+	 * Returns the absolute X, Y offsets for an element
+	 * @param {HTMLElement} element
+	 * @returns {{top: number, right: number, bottom: number, left: number, width: number, height: number}}
+	 */
+	var getOffset = function (element) {
+		var elementBounds = element.getBoundingClientRect();
+		var left = elementBounds.left;
+		var top = elementBounds.top;
+		var documentBounds = document.documentElement.getBoundingClientRect();
+		left -= documentBounds.left;
+		top -= documentBounds.top;
+
+		return {
+			top: top,
+			right: innerWidth - left - elementBounds.width,
+			bottom: innerHeight - top - elementBounds.height,
+			left: left,
+			width: elementBounds.width,
+			height: elementBounds.height
+		};
+	};
+
+	var tokenRegexp = /(?:^|\s)token(?=$|\s)/;
+	var activeRegexp = /(?:^|\s)active(?=$|\s)/g;
+	var flippedRegexp = /(?:^|\s)flipped(?=$|\s)/g;
+
+	/**
+	 * Previewer constructor
+	 * @param {string} type Unique previewer type
+	 * @param {function} updater Function that will be called on mouseover.
+	 * @param {string[]|string=} supportedLanguages Aliases of the languages this previewer must be enabled for. Defaults to "*", all languages.
+	 * @param {function=} initializer Function that will be called on initialization.
+	 * @constructor
+	 */
+	var Previewer = function (type, updater, supportedLanguages, initializer) {
+		this._elt = null;
+		this._type = type;
+		this._clsRegexp = RegExp('(?:^|\\s)' + type + '(?=$|\\s)');
+		this._token = null;
+		this.updater = updater;
+		this._mouseout = this.mouseout.bind(this);
+		this.initializer = initializer;
+
+		var self = this;
+
+		if (!supportedLanguages) {
+			supportedLanguages = ['*'];
+		}
+		if (!Array.isArray(supportedLanguages)) {
+			supportedLanguages = [supportedLanguages];
+		}
+		supportedLanguages.forEach(function (lang) {
+			if (typeof lang !== 'string') {
+				lang = lang.lang;
+			}
+			if (!Previewer.byLanguages[lang]) {
+				Previewer.byLanguages[lang] = [];
+			}
+			if (Previewer.byLanguages[lang].indexOf(self) < 0) {
+				Previewer.byLanguages[lang].push(self);
+			}
+		});
+		Previewer.byType[type] = this;
+	};
+
+	/**
+	 * Creates the HTML element for the previewer.
+	 */
+	Previewer.prototype.init = function () {
+		if (this._elt) {
+			return;
+		}
+		this._elt = document.createElement('div');
+		this._elt.className = 'prism-previewer prism-previewer-' + this._type;
+		document.body.appendChild(this._elt);
+		if(this.initializer) {
+			this.initializer();
+		}
+	};
+
+	Previewer.prototype.isDisabled = function (token) {
+		do {
+			if (token.hasAttribute && token.hasAttribute('data-previewers')) {
+				var previewers = token.getAttribute('data-previewers');
+				return (previewers || '').split(/\s+/).indexOf(this._type) === -1;
+			}
+		} while(token = token.parentNode);
+		return false;
+	};
+
+	/**
+	 * Checks the class name of each hovered element
+	 * @param token
+	 */
+	Previewer.prototype.check = function (token) {
+		if (tokenRegexp.test(token.className) && this.isDisabled(token)) {
+			return;
+		}
+		do {
+			if (tokenRegexp.test(token.className) && this._clsRegexp.test(token.className)) {
+				break;
+			}
+		} while(token = token.parentNode);
+
+		if (token && token !== this._token) {
+			this._token = token;
+			this.show();
+		}
+	};
+
+	/**
+	 * Called on mouseout
+	 */
+	Previewer.prototype.mouseout = function() {
+		this._token.removeEventListener('mouseout', this._mouseout, false);
+		this._token = null;
+		this.hide();
+	};
+
+	/**
+	 * Shows the previewer positioned properly for the current token.
+	 */
+	Previewer.prototype.show = function () {
+		if (!this._elt) {
+			this.init();
+		}
+		if (!this._token) {
+			return;
+		}
+
+		if (this.updater.call(this._elt, this._token.textContent)) {
+			this._token.addEventListener('mouseout', this._mouseout, false);
+
+			var offset = getOffset(this._token);
+			this._elt.className += ' active';
+
+			if (offset.top - this._elt.offsetHeight > 0) {
+				this._elt.className = this._elt.className.replace(flippedRegexp, '');
+				this._elt.style.top = offset.top + 'px';
+				this._elt.style.bottom = '';
+			} else {
+				this._elt.className +=  ' flipped';
+				this._elt.style.bottom = offset.bottom + 'px';
+				this._elt.style.top = '';
+			}
+
+			this._elt.style.left = offset.left + Math.min(200, offset.width / 2) + 'px';
+		} else {
+			this.hide();
+		}
+	};
+
+	/**
+	 * Hides the previewer.
+	 */
+	Previewer.prototype.hide = function () {
+		this._elt.className = this._elt.className.replace(activeRegexp, '');
+	};
+
+	/**
+	 * Map of all registered previewers by language
+	 * @type {{}}
+	 */
+	Previewer.byLanguages = {};
+
+	/**
+	 * Map of all registered previewers by type
+	 * @type {{}}
+	 */
+	Previewer.byType = {};
+
+	/**
+	 * Initializes the mouseover event on the code block.
+	 * @param {HTMLElement} elt The code block (env.element)
+	 * @param {string} lang The language (env.language)
+	 */
+	Previewer.initEvents = function (elt, lang) {
+		var previewers = [];
+		if (Previewer.byLanguages[lang]) {
+			previewers = previewers.concat(Previewer.byLanguages[lang]);
+		}
+		if (Previewer.byLanguages['*']) {
+			previewers = previewers.concat(Previewer.byLanguages['*']);
+		}
+		elt.addEventListener('mouseover', function (e) {
+			var target = e.target;
+			previewers.forEach(function (previewer) {
+				previewer.check(target);
+			});
+		}, false);
+	};
+	Prism.plugins.Previewer = Previewer;
+
+	Prism.hooks.add('before-highlight', function (env) {
+		for (var previewer in previewers) {
+			var languages = previewers[previewer].languages;
+			if (env.language && languages[env.language] && !languages[env.language].initialized) {
+				var lang = languages[env.language];
+				if (!Array.isArray(lang)) {
+					lang = [lang];
+				}
+				lang.forEach(function (lang) {
+					var before, inside, root, skip;
+					if (lang === true) {
+						before = 'important';
+						inside = env.language;
+						lang = env.language;
+					} else {
+						before = lang.before || 'important';
+						inside = lang.inside || lang.lang;
+						root = lang.root || Prism.languages;
+						skip = lang.skip;
+						lang = env.language;
+					}
+
+					if (!skip && Prism.languages[lang]) {
+						Prism.languages.insertBefore(inside, before, previewers[previewer].tokens, root);
+						env.grammar = Prism.languages[lang];
+
+						languages[env.language] = {initialized: true};
+					}
+				});
+			}
+		}
+	});
+
+	// Initialize the previewers only when needed
+	Prism.hooks.add('after-highlight', function (env) {
+		if(Previewer.byLanguages['*'] || Previewer.byLanguages[env.language]) {
+			Previewer.initEvents(env.element, env.language);
+		}
+	});
+
+	for (var previewer in previewers) {
+		previewers[previewer].create();
+	}
+
+}());
+
+
+/***/ }),
+/* 68 */
+/***/ (function(module, exports) {
+
+!function(){if(("undefined"==typeof self||self.Prism)&&self.document&&Function.prototype.bind){var r,s,o={gradient:{create:(r={},s=function(e){if(r[e])return r[e];var s=e.match(/^(\b|\B-[a-z]{1,10}-)((?:repeating-)?(?:linear|radial)-gradient)/),t=s&&s[1],i=s&&s[2],a=e.replace(/^(?:\b|\B-[a-z]{1,10}-)(?:repeating-)?(?:linear|radial)-gradient\(|\)$/g,"").split(/\s*,\s*/);return 0<=i.indexOf("linear")?r[e]=function(e,s,t){var i="180deg";return/^(?:-?\d*\.?\d+(?:deg|rad)|to\b|top|right|bottom|left)/.test(t[0])&&(i=t.shift()).indexOf("to ")<0&&(0<=i.indexOf("top")?i=0<=i.indexOf("left")?"to bottom right":0<=i.indexOf("right")?"to bottom left":"to bottom":0<=i.indexOf("bottom")?i=0<=i.indexOf("left")?"to top right":0<=i.indexOf("right")?"to top left":"to top":0<=i.indexOf("left")?i="to right":0<=i.indexOf("right")?i="to left":e&&(0<=i.indexOf("deg")?i=90-parseFloat(i)+"deg":0<=i.indexOf("rad")&&(i=Math.PI/2-parseFloat(i)+"rad"))),s+"("+i+","+t.join(",")+")"}(t,i,a):0<=i.indexOf("radial")?r[e]=function(e,s,t){if(t[0].indexOf("at")<0){var i="center",a="ellipse",r="farthest-corner";if(/\bcenter|top|right|bottom|left\b|^\d+/.test(t[0])&&(i=t.shift().replace(/\s*-?\d+(?:rad|deg)\s*/,"")),/\bcircle|ellipse|closest|farthest|contain|cover\b/.test(t[0])){var n=t.shift().split(/\s+/);!n[0]||"circle"!==n[0]&&"ellipse"!==n[0]||(a=n.shift()),n[0]&&(r=n.shift()),"cover"===r?r="farthest-corner":"contain"===r&&(r="clothest-side")}return s+"("+a+" "+r+" at "+i+","+t.join(",")+")"}return s+"("+t.join(",")+")"}(0,i,a):r[e]=i+"("+a.join(",")+")"},function(){new Prism.plugins.Previewer("gradient",function(e){return this.firstChild.style.backgroundImage="",this.firstChild.style.backgroundImage=s(e),!!this.firstChild.style.backgroundImage},"*",function(){this._elt.innerHTML="<div></div>"})}),tokens:{gradient:{pattern:/(?:\b|\B-[a-z]{1,10}-)(?:repeating-)?(?:linear|radial)-gradient\((?:(?:rgb|hsl)a?\(.+?\)|[^\)])+\)/gi,inside:{function:/[\w-]+(?=\()/,punctuation:/[(),]/}}},languages:{css:!0,less:!0,sass:[{lang:"sass",before:"punctuation",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["variable-line"]},{lang:"sass",before:"punctuation",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["property-line"]}],scss:!0,stylus:[{lang:"stylus",before:"func",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["property-declaration"].inside},{lang:"stylus",before:"func",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["variable-declaration"].inside}]}},angle:{create:function(){new Prism.plugins.Previewer("angle",function(e){var s,t,i=parseFloat(e),a=e.match(/[a-z]+$/i);if(!i||!a)return!1;switch(a=a[0]){case"deg":s=360;break;case"grad":s=400;break;case"rad":s=2*Math.PI;break;case"turn":s=1}return t=100*i/s,t%=100,this[(i<0?"set":"remove")+"Attribute"]("data-negative",""),this.querySelector("circle").style.strokeDasharray=Math.abs(t)+",500",!0},"*",function(){this._elt.innerHTML='<svg viewBox="0 0 64 64"><circle r="16" cy="32" cx="32"></circle></svg>'})},tokens:{angle:/(?:\b|\B-|(?=\B\.))\d*\.?\d+(?:deg|g?rad|turn)\b/i},languages:{css:!0,less:!0,markup:{lang:"markup",before:"punctuation",inside:"inside",root:Prism.languages.markup&&Prism.languages.markup.tag.inside["attr-value"]},sass:[{lang:"sass",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["property-line"]},{lang:"sass",before:"operator",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["variable-line"]}],scss:!0,stylus:[{lang:"stylus",before:"func",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["property-declaration"].inside},{lang:"stylus",before:"func",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["variable-declaration"].inside}]}},color:{create:function(){new Prism.plugins.Previewer("color",function(e){return this.style.backgroundColor="",this.style.backgroundColor=e,!!this.style.backgroundColor})},tokens:{color:[Prism.languages.css.hexcode].concat(Prism.languages.css.color)},languages:{css:!1,less:!0,markup:{lang:"markup",before:"punctuation",inside:"inside",root:Prism.languages.markup&&Prism.languages.markup.tag.inside["attr-value"]},sass:[{lang:"sass",before:"punctuation",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["variable-line"]},{lang:"sass",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["property-line"]}],scss:!1,stylus:[{lang:"stylus",before:"hexcode",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["property-declaration"].inside},{lang:"stylus",before:"hexcode",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["variable-declaration"].inside}]}},easing:{create:function(){new Prism.plugins.Previewer("easing",function(e){var s=(e={linear:"0,0,1,1",ease:".25,.1,.25,1","ease-in":".42,0,1,1","ease-out":"0,0,.58,1","ease-in-out":".42,0,.58,1"}[e]||e).match(/-?\d*\.?\d+/g);if(4!==s.length)return!1;s=s.map(function(e,s){return 100*(s%2?1-e:e)}),this.querySelector("path").setAttribute("d","M0,100 C"+s[0]+","+s[1]+", "+s[2]+","+s[3]+", 100,0");var t=this.querySelectorAll("line");return t[0].setAttribute("x2",s[0]),t[0].setAttribute("y2",s[1]),t[1].setAttribute("x2",s[2]),t[1].setAttribute("y2",s[3]),!0},"*",function(){this._elt.innerHTML='<svg viewBox="-20 -20 140 140" width="100" height="100"><defs><marker id="prism-previewer-easing-marker" viewBox="0 0 4 4" refX="2" refY="2" markerUnits="strokeWidth"><circle cx="2" cy="2" r="1.5" /></marker></defs><path d="M0,100 C20,50, 40,30, 100,0" /><line x1="0" y1="100" x2="20" y2="50" marker-start="url('+location.href+'#prism-previewer-easing-marker)" marker-end="url('+location.href+'#prism-previewer-easing-marker)" /><line x1="100" y1="0" x2="40" y2="30" marker-start="url('+location.href+'#prism-previewer-easing-marker)" marker-end="url('+location.href+'#prism-previewer-easing-marker)" /></svg>'})},tokens:{easing:{pattern:/\bcubic-bezier\((?:-?\d*\.?\d+,\s*){3}-?\d*\.?\d+\)\B|\b(?:linear|ease(?:-in)?(?:-out)?)(?=\s|[;}]|$)/i,inside:{function:/[\w-]+(?=\()/,punctuation:/[(),]/}}},languages:{css:!0,less:!0,sass:[{lang:"sass",inside:"inside",before:"punctuation",root:Prism.languages.sass&&Prism.languages.sass["variable-line"]},{lang:"sass",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["property-line"]}],scss:!0,stylus:[{lang:"stylus",before:"hexcode",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["property-declaration"].inside},{lang:"stylus",before:"hexcode",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["variable-declaration"].inside}]}},time:{create:function(){new Prism.plugins.Previewer("time",function(e){var s=parseFloat(e),t=e.match(/[a-z]+$/i);return!(!s||!t)&&(t=t[0],this.querySelector("circle").style.animationDuration=2*s+t,!0)},"*",function(){this._elt.innerHTML='<svg viewBox="0 0 64 64"><circle r="16" cy="32" cx="32"></circle></svg>'})},tokens:{time:/(?:\b|\B-|(?=\B\.))\d*\.?\d+m?s\b/i},languages:{css:!0,less:!0,markup:{lang:"markup",before:"punctuation",inside:"inside",root:Prism.languages.markup&&Prism.languages.markup.tag.inside["attr-value"]},sass:[{lang:"sass",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["property-line"]},{lang:"sass",before:"operator",inside:"inside",root:Prism.languages.sass&&Prism.languages.sass["variable-line"]}],scss:!0,stylus:[{lang:"stylus",before:"hexcode",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["property-declaration"].inside},{lang:"stylus",before:"hexcode",inside:"rest",root:Prism.languages.stylus&&Prism.languages.stylus["variable-declaration"].inside}]}}},t=/(?:^|\s)token(?=$|\s)/,e=/(?:^|\s)active(?=$|\s)/g,i=/(?:^|\s)flipped(?=$|\s)/g,n=function(e,s,t,i){this._elt=null,this._type=e,this._clsRegexp=RegExp("(?:^|\\s)"+e+"(?=$|\\s)"),this._token=null,this.updater=s,this._mouseout=this.mouseout.bind(this),this.initializer=i;var a=this;t||(t=["*"]),Array.isArray(t)||(t=[t]),t.forEach(function(e){"string"!=typeof e&&(e=e.lang),n.byLanguages[e]||(n.byLanguages[e]=[]),n.byLanguages[e].indexOf(a)<0&&n.byLanguages[e].push(a)}),n.byType[e]=this};for(var a in n.prototype.init=function(){this._elt||(this._elt=document.createElement("div"),this._elt.className="prism-previewer prism-previewer-"+this._type,document.body.appendChild(this._elt),this.initializer&&this.initializer())},n.prototype.isDisabled=function(e){do{if(e.hasAttribute&&e.hasAttribute("data-previewers"))return-1===(e.getAttribute("data-previewers")||"").split(/\s+/).indexOf(this._type)}while(e=e.parentNode);return!1},n.prototype.check=function(e){if(!t.test(e.className)||!this.isDisabled(e)){do{if(t.test(e.className)&&this._clsRegexp.test(e.className))break}while(e=e.parentNode);e&&e!==this._token&&(this._token=e,this.show())}},n.prototype.mouseout=function(){this._token.removeEventListener("mouseout",this._mouseout,!1),this._token=null,this.hide()},n.prototype.show=function(){if(this._elt||this.init(),this._token)if(this.updater.call(this._elt,this._token.textContent)){this._token.addEventListener("mouseout",this._mouseout,!1);var e=function(e){var s=e.getBoundingClientRect(),t=s.left,i=s.top,a=document.documentElement.getBoundingClientRect();return t-=a.left,{top:i-=a.top,right:innerWidth-t-s.width,bottom:innerHeight-i-s.height,left:t,width:s.width,height:s.height}}(this._token);this._elt.className+=" active",0<e.top-this._elt.offsetHeight?(this._elt.className=this._elt.className.replace(i,""),this._elt.style.top=e.top+"px",this._elt.style.bottom=""):(this._elt.className+=" flipped",this._elt.style.bottom=e.bottom+"px",this._elt.style.top=""),this._elt.style.left=e.left+Math.min(200,e.width/2)+"px"}else this.hide()},n.prototype.hide=function(){this._elt.className=this._elt.className.replace(e,"")},n.byLanguages={},n.byType={},n.initEvents=function(e,s){var t=[];n.byLanguages[s]&&(t=t.concat(n.byLanguages[s])),n.byLanguages["*"]&&(t=t.concat(n.byLanguages["*"])),e.addEventListener("mouseover",function(e){var s=e.target;t.forEach(function(e){e.check(s)})},!1)},Prism.plugins.Previewer=n,Prism.hooks.add("before-highlight",function(r){for(var n in o){var l=o[n].languages;if(r.language&&l[r.language]&&!l[r.language].initialized){var e=l[r.language];Array.isArray(e)||(e=[e]),e.forEach(function(e){var s,t,i,a;e=(!0===e?(s="important",t=r.language):(s=e.before||"important",t=e.inside||e.lang,i=e.root||Prism.languages,a=e.skip),r.language),!a&&Prism.languages[e]&&(Prism.languages.insertBefore(t,s,o[n].tokens,i),r.grammar=Prism.languages[e],l[r.language]={initialized:!0})})}}}),Prism.hooks.add("after-highlight",function(e){(n.byLanguages["*"]||n.byLanguages[e.language])&&n.initEvents(e.element,e.language)}),o)o[a].create()}}();
+
+/***/ }),
+/* 69 */
+/***/ (function(module, exports) {
+
+(function() {
+
+if (typeof self === 'undefined' || !self.Prism || !self.document) {
+	return;
+}
+
+Prism.hooks.add('before-sanity-check', function (env) {
+	if (env.code) {
+		var pre = env.element.parentNode;
+		var clsReg = /(?:^|\s)keep-initial-line-feed(?:\s|$)/;
+		if (
+			pre && pre.nodeName.toLowerCase() === 'pre' &&
+			// Apply only if nor the <pre> or the <code> have the class
+			(!clsReg.test(pre.className) && !clsReg.test(env.element.className))
+		) {
+			env.code = env.code.replace(/^(?:\r?\n|\r)/, '');
+		}
+	}
+});
+
+}());
+
+
+/***/ }),
+/* 70 */
+/***/ (function(module, exports) {
+
+"undefined"!=typeof self&&self.Prism&&self.document&&Prism.hooks.add("before-sanity-check",function(e){if(e.code){var s=e.element.parentNode,n=/(?:^|\s)keep-initial-line-feed(?:\s|$)/;!s||"pre"!==s.nodeName.toLowerCase()||n.test(s.className)||n.test(e.element.className)||(e.code=e.code.replace(/^(?:\r?\n|\r)/,""))}});
+
+/***/ }),
+/* 71 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {(function () {
+
+	if (
+		typeof self !== 'undefined' && !self.Prism ||
+		typeof global !== 'undefined' && !global.Prism
+	) {
+		return;
+	}
+
+
+	var invisibles = {
+		'tab': /\t/,
+		'crlf': /\r\n/,
+		'lf': /\n/,
+		'cr': /\r/,
+		'space': / /
+	};
+
+
+	/**
+	 * Handles the recursive calling of `addInvisibles` for one token.
+	 *
+	 * @param {Object|Array} tokens The grammar or array which contains the token.
+	 * @param {string|number} name The name or index of the token in `tokens`.
+	 */
+	function handleToken(tokens, name) {
+		var value = tokens[name];
+
+		var type = Prism.util.type(value);
+		switch (type) {
+			case 'RegExp':
+				var inside = {};
+				tokens[name] = {
+					pattern: value,
+					inside: inside
+				};
+				addInvisibles(inside);
+				break;
+
+			case 'Array':
+				for (var i = 0, l = value.length; i < l; i++) {
+					handleToken(value, i);
+				}
+				break;
+
+			default: // 'Object'
+				var inside = value.inside || (value.inside = {});
+				addInvisibles(inside);
+				break;
+		}
+	}
+
+	/**
+	 * Recursively adds patterns to match invisible characters to the given grammar (if not added already).
+	 *
+	 * @param {Object} grammar
+	 */
+	function addInvisibles(grammar) {
+		if (!grammar || grammar['tab']) {
+			return;
+		}
+
+		// assign invisibles here to "mark" the grammar in case of self references
+		for (var name in invisibles) {
+			if (invisibles.hasOwnProperty(name)) {
+				grammar[name] = invisibles[name];
+			}
+		}
+
+		for (var name in grammar) {
+			if (grammar.hasOwnProperty(name) && !invisibles[name]) {
+				if (name === 'rest') {
+					addInvisibles(grammar['rest']);
+				} else {
+					handleToken(grammar, name);
+				}
+			}
+		}
+	}
+
+	Prism.hooks.add('before-highlight', function (env) {
+		addInvisibles(env.grammar);
+	});
+})();
+
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 72 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {!function(){if(("undefined"==typeof self||self.Prism)&&("undefined"==typeof global||global.Prism)){var i={tab:/\t/,crlf:/\r\n/,lf:/\n/,cr:/\r/,space:/ /};Prism.hooks.add("before-highlight",function(r){s(r.grammar)})}function f(r,e){var i=r[e];switch(Prism.util.type(i)){case"RegExp":var a={};r[e]={pattern:i,inside:a},s(a);break;case"Array":for(var n=0,t=i.length;n<t;n++)f(i,n);break;default:s(a=i.inside||(i.inside={}))}}function s(r){if(r&&!r.tab){for(var e in i)i.hasOwnProperty(e)&&(r[e]=i[e]);for(var e in r)r.hasOwnProperty(e)&&!i[e]&&("rest"===e?s(r.rest):f(r,e))}}}();
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 73 */
+/***/ (function(module, exports) {
+
+(function () {
+
+	if (typeof self === 'undefined' || !self.Prism || !self.document) {
+		return;
+	}
+
+	if (!Prism.plugins.toolbar) {
+		console.warn('Show Languages plugin loaded before Toolbar plugin.');
+
+		return;
+	}
+
+	// The languages map is built automatically with gulp
+	var Languages = /*languages_placeholder[*/{
+		"html": "HTML",
+		"xml": "XML",
+		"svg": "SVG",
+		"mathml": "MathML",
+		"css": "CSS",
+		"clike": "C-like",
+		"js": "JavaScript",
+		"abap": "ABAP",
+		"abnf": "Augmented Backus–Naur form",
+		"antlr4": "ANTLR4",
+		"g4": "ANTLR4",
+		"apacheconf": "Apache Configuration",
+		"apl": "APL",
+		"aql": "AQL",
+		"arff": "ARFF",
+		"asciidoc": "AsciiDoc",
+		"adoc": "AsciiDoc",
+		"asm6502": "6502 Assembly",
+		"aspnet": "ASP.NET (C#)",
+		"autohotkey": "AutoHotkey",
+		"autoit": "AutoIt",
+		"shell": "Bash",
+		"basic": "BASIC",
+		"bbcode": "BBcode",
+		"bnf": "Backus–Naur form",
+		"rbnf": "Routing Backus–Naur form",
+		"csharp": "C#",
+		"cs": "C#",
+		"dotnet": "C#",
+		"cpp": "C++",
+		"cil": "CIL",
+		"coffee": "CoffeeScript",
+		"cmake": "CMake",
+		"csp": "Content-Security-Policy",
+		"css-extras": "CSS Extras",
+		"django": "Django/Jinja2",
+		"jinja2": "Django/Jinja2",
+		"dns-zone-file": "DNS zone file",
+		"dns-zone": "DNS zone file",
+		"dockerfile": "Docker",
+		"ebnf": "Extended Backus–Naur form",
+		"ejs": "EJS",
+		"etlua": "Embedded Lua templating",
+		"erb": "ERB",
+		"fsharp": "F#",
+		"firestore-security-rules": "Firestore security rules",
+		"ftl": "FreeMarker Template Language",
+		"gcode": "G-code",
+		"gdscript": "GDScript",
+		"gedcom": "GEDCOM",
+		"glsl": "GLSL",
+		"gml": "GameMaker Language",
+		"gamemakerlanguage": "GameMaker Language",
+		"graphql": "GraphQL",
+		"hs": "Haskell",
+		"hcl": "HCL",
+		"http": "HTTP",
+		"hpkp": "HTTP Public-Key-Pins",
+		"hsts": "HTTP Strict-Transport-Security",
+		"ichigojam": "IchigoJam",
+		"inform7": "Inform 7",
+		"javadoc": "JavaDoc",
+		"javadoclike": "JavaDoc-like",
+		"javastacktrace": "Java stack trace",
+		"jq": "JQ",
+		"jsdoc": "JSDoc",
+		"js-extras": "JS Extras",
+		"js-templates": "JS Templates",
+		"json": "JSON",
+		"jsonp": "JSONP",
+		"json5": "JSON5",
+		"latex": "LaTeX",
+		"tex": "TeX",
+		"context": "ConTeXt",
+		"lilypond": "LilyPond",
+		"ly": "LilyPond",
+		"emacs": "Lisp",
+		"elisp": "Lisp",
+		"emacs-lisp": "Lisp",
+		"lolcode": "LOLCODE",
+		"md": "Markdown",
+		"markup-templating": "Markup templating",
+		"matlab": "MATLAB",
+		"mel": "MEL",
+		"moon": "MoonScript",
+		"n1ql": "N1QL",
+		"n4js": "N4JS",
+		"n4jsd": "N4JS",
+		"nand2tetris-hdl": "Nand To Tetris HDL",
+		"nasm": "NASM",
+		"neon": "NEON",
+		"nginx": "nginx",
+		"nsis": "NSIS",
+		"objectivec": "Objective-C",
+		"ocaml": "OCaml",
+		"opencl": "OpenCL",
+		"parigp": "PARI/GP",
+		"objectpascal": "Object Pascal",
+		"pcaxis": "PC-Axis",
+		"px": "PC-Axis",
+		"php": "PHP",
+		"phpdoc": "PHPDoc",
+		"php-extras": "PHP Extras",
+		"plsql": "PL/SQL",
+		"powershell": "PowerShell",
+		"properties": ".properties",
+		"protobuf": "Protocol Buffers",
+		"py": "Python",
+		"q": "Q (kdb+ database)",
+		"qml": "QML",
+		"jsx": "React JSX",
+		"tsx": "React TSX",
+		"renpy": "Ren'py",
+		"rest": "reST (reStructuredText)",
+		"robotframework": "Robot Framework",
+		"robot": "Robot Framework",
+		"rb": "Ruby",
+		"sas": "SAS",
+		"sass": "Sass (Sass)",
+		"scss": "Sass (Scss)",
+		"shell-session": "Shell session",
+		"solidity": "Solidity (Ethereum)",
+		"soy": "Soy (Closure Template)",
+		"sparql": "SPARQL",
+		"rq": "SPARQL",
+		"splunk-spl": "Splunk SPL",
+		"sqf": "SQF: Status Quo Function (Arma 3)",
+		"sql": "SQL",
+		"tap": "TAP",
+		"toml": "TOML",
+		"tt2": "Template Toolkit 2",
+		"trig": "TriG",
+		"ts": "TypeScript",
+		"t4-cs": "T4 Text Templates (C#)",
+		"t4": "T4 Text Templates (C#)",
+		"t4-vb": "T4 Text Templates (VB)",
+		"t4-templating": "T4 templating",
+		"vbnet": "VB.Net",
+		"vhdl": "VHDL",
+		"vim": "vim",
+		"visual-basic": "Visual Basic",
+		"vb": "Visual Basic",
+		"wasm": "WebAssembly",
+		"wiki": "Wiki markup",
+		"xeoracube": "XeoraCube",
+		"xojo": "Xojo (REALbasic)",
+		"xquery": "XQuery",
+		"yaml": "YAML",
+		"yml": "YAML"
+	}/*]*/;
+
+	Prism.plugins.toolbar.registerButton('show-language', function (env) {
+		var pre = env.element.parentNode;
+		if (!pre || !/pre/i.test(pre.nodeName)) {
+			return;
+		}
+
+		/**
+		 * Tries to guess the name of a language given its id.
+		 *
+		 * @param {string} id The language id.
+		 * @returns {string}
+		 */
+		function guessTitle(id) {
+			if (!id) {
+				return id;
+			}
+			return (id.substring(0, 1).toUpperCase() + id.substring(1)).replace(/s(?=cript)/, 'S');
+		}
+
+		var language = pre.getAttribute('data-language') || Languages[env.language] || guessTitle(env.language);
+
+		if (!language) {
+			return;
+		}
+		var element = document.createElement('span');
+		element.textContent = language;
+
+		return element;
+	});
+
+})();
+
+
+/***/ }),
+/* 74 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof self&&self.Prism&&self.document)if(Prism.plugins.toolbar){var r={html:"HTML",xml:"XML",svg:"SVG",mathml:"MathML",css:"CSS",clike:"C-like",js:"JavaScript",abap:"ABAP",abnf:"Augmented Backus–Naur form",antlr4:"ANTLR4",g4:"ANTLR4",apacheconf:"Apache Configuration",apl:"APL",aql:"AQL",arff:"ARFF",asciidoc:"AsciiDoc",adoc:"AsciiDoc",asm6502:"6502 Assembly",aspnet:"ASP.NET (C#)",autohotkey:"AutoHotkey",autoit:"AutoIt",shell:"Bash",basic:"BASIC",bbcode:"BBcode",bnf:"Backus–Naur form",rbnf:"Routing Backus–Naur form",csharp:"C#",cs:"C#",dotnet:"C#",cpp:"C++",cil:"CIL",coffee:"CoffeeScript",cmake:"CMake",csp:"Content-Security-Policy","css-extras":"CSS Extras",django:"Django/Jinja2",jinja2:"Django/Jinja2","dns-zone-file":"DNS zone file","dns-zone":"DNS zone file",dockerfile:"Docker",ebnf:"Extended Backus–Naur form",ejs:"EJS",etlua:"Embedded Lua templating",erb:"ERB",fsharp:"F#","firestore-security-rules":"Firestore security rules",ftl:"FreeMarker Template Language",gcode:"G-code",gdscript:"GDScript",gedcom:"GEDCOM",glsl:"GLSL",gml:"GameMaker Language",gamemakerlanguage:"GameMaker Language",graphql:"GraphQL",hs:"Haskell",hcl:"HCL",http:"HTTP",hpkp:"HTTP Public-Key-Pins",hsts:"HTTP Strict-Transport-Security",ichigojam:"IchigoJam",inform7:"Inform 7",javadoc:"JavaDoc",javadoclike:"JavaDoc-like",javastacktrace:"Java stack trace",jq:"JQ",jsdoc:"JSDoc","js-extras":"JS Extras","js-templates":"JS Templates",json:"JSON",jsonp:"JSONP",json5:"JSON5",latex:"LaTeX",tex:"TeX",context:"ConTeXt",lilypond:"LilyPond",ly:"LilyPond",emacs:"Lisp",elisp:"Lisp","emacs-lisp":"Lisp",lolcode:"LOLCODE",md:"Markdown","markup-templating":"Markup templating",matlab:"MATLAB",mel:"MEL",moon:"MoonScript",n1ql:"N1QL",n4js:"N4JS",n4jsd:"N4JS","nand2tetris-hdl":"Nand To Tetris HDL",nasm:"NASM",neon:"NEON",nginx:"nginx",nsis:"NSIS",objectivec:"Objective-C",ocaml:"OCaml",opencl:"OpenCL",parigp:"PARI/GP",objectpascal:"Object Pascal",pcaxis:"PC-Axis",px:"PC-Axis",php:"PHP",phpdoc:"PHPDoc","php-extras":"PHP Extras",plsql:"PL/SQL",powershell:"PowerShell",properties:".properties",protobuf:"Protocol Buffers",py:"Python",q:"Q (kdb+ database)",qml:"QML",jsx:"React JSX",tsx:"React TSX",renpy:"Ren'py",rest:"reST (reStructuredText)",robotframework:"Robot Framework",robot:"Robot Framework",rb:"Ruby",sas:"SAS",sass:"Sass (Sass)",scss:"Sass (Scss)","shell-session":"Shell session",solidity:"Solidity (Ethereum)",soy:"Soy (Closure Template)",sparql:"SPARQL",rq:"SPARQL","splunk-spl":"Splunk SPL",sqf:"SQF: Status Quo Function (Arma 3)",sql:"SQL",tap:"TAP",toml:"TOML",tt2:"Template Toolkit 2",trig:"TriG",ts:"TypeScript","t4-cs":"T4 Text Templates (C#)",t4:"T4 Text Templates (C#)","t4-vb":"T4 Text Templates (VB)","t4-templating":"T4 templating",vbnet:"VB.Net",vhdl:"VHDL",vim:"vim","visual-basic":"Visual Basic",vb:"Visual Basic",wasm:"WebAssembly",wiki:"Wiki markup",xeoracube:"XeoraCube",xojo:"Xojo (REALbasic)",xquery:"XQuery",yaml:"YAML",yml:"YAML"};Prism.plugins.toolbar.registerButton("show-language",function(e){var a=e.element.parentNode;if(a&&/pre/i.test(a.nodeName)){var s,t=a.getAttribute("data-language")||r[e.language]||((s=e.language)?(s.substring(0,1).toUpperCase()+s.substring(1)).replace(/s(?=cript)/,"S"):s);if(t){var o=document.createElement("span");return o.textContent=t,o}}})}else console.warn("Show Languages plugin loaded before Toolbar plugin.")}();
+
+/***/ }),
+/* 75 */
+/***/ (function(module, exports) {
+
+(function(){
+	if (typeof self === 'undefined' || !self.Prism || !self.document) {
+		return;
+	}
+
+	var callbacks = [];
+	var map = {};
+	var noop = function() {};
+
+	Prism.plugins.toolbar = {};
+
+	/**
+	 * @typedef ButtonOptions
+	 * @property {string} text The text displayed.
+	 * @property {string} [url] The URL of the link which will be created.
+	 * @property {Function} [onClick] The event listener for the `click` event of the created button.
+	 * @property {string} [className] The class attribute to include with element.
+	 */
+
+	/**
+	 * Register a button callback with the toolbar.
+	 *
+	 * @param {string} key
+	 * @param {ButtonOptions|Function} opts
+	 */
+	var registerButton = Prism.plugins.toolbar.registerButton = function (key, opts) {
+		var callback;
+
+		if (typeof opts === 'function') {
+			callback = opts;
+		} else {
+			callback = function (env) {
+				var element;
+
+				if (typeof opts.onClick === 'function') {
+					element = document.createElement('button');
+					element.type = 'button';
+					element.addEventListener('click', function () {
+						opts.onClick.call(this, env);
+					});
+				} else if (typeof opts.url === 'string') {
+					element = document.createElement('a');
+					element.href = opts.url;
+				} else {
+					element = document.createElement('span');
+				}
+
+				if (opts.className) {
+					element.classList.add(opts.className);
+				}
+
+				element.textContent = opts.text;
+
+				return element;
+			};
+		}
+
+		if (key in map) {
+			console.warn('There is a button with the key "' + key + '" registered already.');
+			return;
+		}
+
+		callbacks.push(map[key] = callback);
+	};
+
+	/**
+	 * Post-highlight Prism hook callback.
+	 *
+	 * @param env
+	 */
+	var hook = Prism.plugins.toolbar.hook = function (env) {
+		// Check if inline or actual code block (credit to line-numbers plugin)
+		var pre = env.element.parentNode;
+		if (!pre || !/pre/i.test(pre.nodeName)) {
+			return;
+		}
+
+		// Autoloader rehighlights, so only do this once.
+		if (pre.parentNode.classList.contains('code-toolbar')) {
+			return;
+		}
+
+		// Create wrapper for <pre> to prevent scrolling toolbar with content
+		var wrapper = document.createElement("div");
+		wrapper.classList.add("code-toolbar");
+		pre.parentNode.insertBefore(wrapper, pre);
+		wrapper.appendChild(pre);
+
+		// Setup the toolbar
+		var toolbar = document.createElement('div');
+		toolbar.classList.add('toolbar');
+
+		if (document.body.hasAttribute('data-toolbar-order')) {
+			callbacks = document.body.getAttribute('data-toolbar-order').split(',').map(function(key) {
+				return map[key] || noop;
+			});
+		}
+
+		callbacks.forEach(function(callback) {
+			var element = callback(env);
+
+			if (!element) {
+				return;
+			}
+
+			var item = document.createElement('div');
+			item.classList.add('toolbar-item');
+
+			item.appendChild(element);
+			toolbar.appendChild(item);
+		});
+
+		// Add our toolbar to the currently created wrapper of <pre> tag
+		wrapper.appendChild(toolbar);
+	};
+
+	registerButton('label', function(env) {
+		var pre = env.element.parentNode;
+		if (!pre || !/pre/i.test(pre.nodeName)) {
+			return;
+		}
+
+		if (!pre.hasAttribute('data-label')) {
+			return;
+		}
+
+		var element, template;
+		var text = pre.getAttribute('data-label');
+		try {
+			// Any normal text will blow up this selector.
+			template = document.querySelector('template#' + text);
+		} catch (e) {}
+
+		if (template) {
+			element = template.content;
+		} else {
+			if (pre.hasAttribute('data-url')) {
+				element = document.createElement('a');
+				element.href = pre.getAttribute('data-url');
+			} else {
+				element = document.createElement('span');
+			}
+
+			element.textContent = text;
+		}
+
+		return element;
+	});
+
+	/**
+	 * Register the toolbar with Prism.
+	 */
+	Prism.hooks.add('complete', hook);
+})();
+
+
+/***/ }),
+/* 76 */
+/***/ (function(module, exports) {
+
+!function(){if("undefined"!=typeof self&&self.Prism&&self.document){var r=[],i={},a=function(){};Prism.plugins.toolbar={};var t=Prism.plugins.toolbar.registerButton=function(t,a){var e;e="function"==typeof a?a:function(t){var e;return"function"==typeof a.onClick?((e=document.createElement("button")).type="button",e.addEventListener("click",function(){a.onClick.call(this,t)})):"string"==typeof a.url?(e=document.createElement("a")).href=a.url:e=document.createElement("span"),a.className&&e.classList.add(a.className),e.textContent=a.text,e},t in i?console.warn('There is a button with the key "'+t+'" registered already.'):r.push(i[t]=e)},e=Prism.plugins.toolbar.hook=function(n){var t=n.element.parentNode;if(t&&/pre/i.test(t.nodeName)&&!t.parentNode.classList.contains("code-toolbar")){var e=document.createElement("div");e.classList.add("code-toolbar"),t.parentNode.insertBefore(e,t),e.appendChild(t);var o=document.createElement("div");o.classList.add("toolbar"),document.body.hasAttribute("data-toolbar-order")&&(r=document.body.getAttribute("data-toolbar-order").split(",").map(function(t){return i[t]||a})),r.forEach(function(t){var e=t(n);if(e){var a=document.createElement("div");a.classList.add("toolbar-item"),a.appendChild(e),o.appendChild(a)}}),e.appendChild(o)}};t("label",function(t){var e=t.element.parentNode;if(e&&/pre/i.test(e.nodeName)&&e.hasAttribute("data-label")){var a,n,o=e.getAttribute("data-label");try{n=document.querySelector("template#"+o)}catch(t){}return n?a=n.content:(e.hasAttribute("data-url")?(a=document.createElement("a")).href=e.getAttribute("data-url"):a=document.createElement("span"),a.textContent=o),a}}),Prism.hooks.add("complete",e)}}();
+
+/***/ }),
+/* 77 */
+/***/ (function(module, exports) {
+
+(function () {
+
+	if (typeof self === 'undefined' || !self.Prism || !self.document || !Prism.languages.markup) {
+		return;
+	}
+
+	Prism.plugins.UnescapedMarkup = true;
+
+	Prism.hooks.add('before-highlightall', function (env) {
+		env.selector += ", [class*='lang-'] script[type='text/plain'], [class*='language-'] script[type='text/plain']" +
+		                ", script[type='text/plain'][class*='lang-'], script[type='text/plain'][class*='language-']";
+	});
+
+	Prism.hooks.add('before-sanity-check', function (env) {
+		if ((env.element.matches || env.element.msMatchesSelector).call(env.element, "script[type='text/plain']")) {
+			var code = document.createElement("code");
+			var pre = document.createElement("pre");
+
+			pre.className = code.className = env.element.className;
+
+			if (env.element.dataset) {
+				Object.keys(env.element.dataset).forEach(function (key) {
+					if (Object.prototype.hasOwnProperty.call(env.element.dataset, key)) {
+						pre.dataset[key] = env.element.dataset[key];
+					}
+				});
+			}
+
+			env.code = env.code.replace(/&lt;\/script(>|&gt;)/gi, "</scri" + "pt>");
+			code.textContent = env.code;
+
+			pre.appendChild(code);
+			env.element.parentNode.replaceChild(pre, env.element);
+			env.element = code;
+			return;
+		}
+
+		var pre = env.element.parentNode;
+		if (!env.code && pre && pre.nodeName.toLowerCase() == 'pre' &&
+				env.element.childNodes.length && env.element.childNodes[0].nodeName == "#comment") {
+			env.element.textContent = env.code = env.element.childNodes[0].textContent;
+		}
+	});
+}());
+
+
+/***/ }),
+/* 78 */
+/***/ (function(module, exports) {
+
+"undefined"!=typeof self&&self.Prism&&self.document&&Prism.languages.markup&&(Prism.plugins.UnescapedMarkup=!0,Prism.hooks.add("before-highlightall",function(e){e.selector+=", [class*='lang-'] script[type='text/plain'], [class*='language-'] script[type='text/plain'], script[type='text/plain'][class*='lang-'], script[type='text/plain'][class*='language-']"}),Prism.hooks.add("before-sanity-check",function(t){if((t.element.matches||t.element.msMatchesSelector).call(t.element,"script[type='text/plain']")){var e=document.createElement("code");return(a=document.createElement("pre")).className=e.className=t.element.className,t.element.dataset&&Object.keys(t.element.dataset).forEach(function(e){Object.prototype.hasOwnProperty.call(t.element.dataset,e)&&(a.dataset[e]=t.element.dataset[e])}),t.code=t.code.replace(/&lt;\/script(>|&gt;)/gi,"<\/script>"),e.textContent=t.code,a.appendChild(e),t.element.parentNode.replaceChild(a,t.element),void(t.element=e)}var a=t.element.parentNode;!t.code&&a&&"pre"==a.nodeName.toLowerCase()&&t.element.childNodes.length&&"#comment"==t.element.childNodes[0].nodeName&&(t.element.textContent=t.code=t.element.childNodes[0].textContent)}));
+
+/***/ }),
+/* 79 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {(function(){
+
+if (
+	typeof self !== 'undefined' && !self.Prism ||
+	typeof global !== 'undefined' && !global.Prism
+) {
+	return;
+}
+
+if (Prism.languages.css) {
+	// check whether the selector is an advanced pattern before extending it
+	if (Prism.languages.css.selector.pattern)
+	{
+		Prism.languages.css.selector.inside['pseudo-class'] = /:[\w-]+/;
+		Prism.languages.css.selector.inside['pseudo-element'] = /::[\w-]+/;
+	}
+	else
+	{
+		Prism.languages.css.selector = {
+			pattern: Prism.languages.css.selector,
+			inside: {
+				'pseudo-class': /:[\w-]+/,
+				'pseudo-element': /::[\w-]+/
+			}
+		};
+	}
+}
+
+if (Prism.languages.markup) {
+	Prism.languages.markup.tag.inside.tag.inside['tag-id'] = /[\w-]+/;
+	
+	var Tags = {
+		HTML: {
+			'a': 1, 'abbr': 1, 'acronym': 1, 'b': 1, 'basefont': 1, 'bdo': 1, 'big': 1, 'blink': 1, 'cite': 1, 'code': 1, 'dfn': 1, 'em': 1, 'kbd': 1,  'i': 1, 
+			'rp': 1, 'rt': 1, 'ruby': 1, 's': 1, 'samp': 1, 'small': 1, 'spacer': 1, 'strike': 1, 'strong': 1, 'sub': 1, 'sup': 1, 'time': 1, 'tt': 1,  'u': 1, 
+			'var': 1, 'wbr': 1, 'noframes': 1, 'summary': 1, 'command': 1, 'dt': 1, 'dd': 1, 'figure': 1, 'figcaption': 1, 'center': 1, 'section': 1, 'nav': 1,
+			'article': 1, 'aside': 1, 'hgroup': 1, 'header': 1, 'footer': 1, 'address': 1, 'noscript': 1, 'isIndex': 1, 'main': 1, 'mark': 1, 'marquee': 1,
+			'meter': 1, 'menu': 1
+		},
+		SVG: {
+			'animateColor': 1, 'animateMotion': 1, 'animateTransform': 1, 'glyph': 1, 'feBlend': 1, 'feColorMatrix': 1, 'feComponentTransfer': 1, 
+			'feFuncR': 1, 'feFuncG': 1, 'feFuncB': 1, 'feFuncA': 1, 'feComposite': 1, 'feConvolveMatrix': 1, 'feDiffuseLighting': 1, 'feDisplacementMap': 1, 
+			'feFlood': 1, 'feGaussianBlur': 1, 'feImage': 1, 'feMerge': 1, 'feMergeNode': 1, 'feMorphology': 1, 'feOffset': 1, 'feSpecularLighting': 1, 
+			'feTile': 1, 'feTurbulence': 1, 'feDistantLight': 1, 'fePointLight': 1, 'feSpotLight': 1, 'linearGradient': 1, 'radialGradient': 1, 'altGlyph': 1, 
+			'textPath': 1, 'tref': 1, 'altglyph': 1, 'textpath': 1, 'altglyphdef': 1, 'altglyphitem': 1, 'clipPath': 1, 'color-profile': 1, 'cursor': 1,
+			'font-face': 1, 'font-face-format': 1, 'font-face-name': 1, 'font-face-src': 1, 'font-face-uri': 1, 'foreignObject': 1, 'glyphRef': 1,
+			'hkern': 1, 'vkern': 1
+		},
+		MathML: {}
+	}
+}
+
+var language;
+
+Prism.hooks.add('wrap', function(env) {
+	if ((env.type == 'tag-id'
+		|| (env.type == 'property' && env.content.indexOf('-') != 0)
+		|| (env.type == 'rule'&& env.content.indexOf('@-') != 0)
+		|| (env.type == 'pseudo-class'&& env.content.indexOf(':-') != 0) 
+		|| (env.type == 'pseudo-element'&& env.content.indexOf('::-') != 0) 
+        || (env.type == 'attr-name' && env.content.indexOf('data-') != 0)
+		) && env.content.indexOf('<') === -1
+	) {
+		if (env.language == 'css'
+			|| env.language == 'scss'
+			|| env.language == 'markup'
+		) {
+			var href = 'https://webplatform.github.io/docs/';
+			var content = env.content;
+
+			if (env.language == 'css' || env.language == 'scss') {
+				href += 'css/';
+
+				if (env.type == 'property') {
+					href += 'properties/';
+				}
+				else if (env.type == 'rule') {
+					href += 'atrules/';
+					content = content.substring(1);
+				}
+				else if (env.type == 'pseudo-class') {
+					href += 'selectors/pseudo-classes/';
+					content = content.substring(1);
+				}
+				else if (env.type == 'pseudo-element') {
+					href += 'selectors/pseudo-elements/';
+					content = content.substring(2);
+				}
+			}
+			else if (env.language == 'markup') {
+				if (env.type == 'tag-id') {
+					// Check language
+					language = getLanguage(env.content) || language;
+
+					if (language) {
+						href += language + '/elements/';
+					}
+					else {
+						return; // Abort
+					}
+				}
+				else if (env.type == 'attr-name') {
+					if (language) {
+						href += language + '/attributes/';
+					}
+					else {
+						return; // Abort
+					}
+				}
+			}
+
+			href += content;
+			env.tag = 'a';
+			env.attributes.href = href;
+			env.attributes.target = '_blank';
+		}
+	}
+});
+
+function getLanguage(tag) {
+	var tagL = tag.toLowerCase();
+	
+	if (Tags.HTML[tagL]) {
+		return 'html';
+	}
+	else if (Tags.SVG[tag]) {
+		return 'svg';
+	}
+	else if (Tags.MathML[tag]) {
+		return 'mathml';
+	}
+	
+	// Not in dictionary, perform check
+	if (Tags.HTML[tagL] !== 0 && typeof document !== 'undefined') {
+		var htmlInterface = (document.createElement(tag).toString().match(/\[object HTML(.+)Element\]/) || [])[1];
+		
+		if (htmlInterface && htmlInterface != 'Unknown') {
+			Tags.HTML[tagL] = 1;
+			return 'html';
+		}
+	}
+	
+	Tags.HTML[tagL] = 0;
+	
+	if (Tags.SVG[tag] !== 0 && typeof document !== 'undefined') {
+		var svgInterface = (document.createElementNS('http://www.w3.org/2000/svg', tag).toString().match(/\[object SVG(.+)Element\]/) || [])[1];
+		
+		if (svgInterface && svgInterface != 'Unknown') {
+			Tags.SVG[tag] = 1;
+			return 'svg';
+		}
+	}
+	
+	Tags.SVG[tag] = 0;
+	
+	// Lame way to detect MathML, but browsers don’t expose interface names there :(
+	if (Tags.MathML[tag] !== 0) {
+		if (tag.indexOf('m') === 0) {
+			Tags.MathML[tag] = 1;
+			return 'mathml';
+		}
+	}
+	
+	Tags.MathML[tag] = 0;
+	
+	return null;
+}
+
+})();
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 80 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {!function(){if(("undefined"==typeof self||self.Prism)&&("undefined"==typeof global||global.Prism)){if(Prism.languages.css&&(Prism.languages.css.selector.pattern?(Prism.languages.css.selector.inside["pseudo-class"]=/:[\w-]+/,Prism.languages.css.selector.inside["pseudo-element"]=/::[\w-]+/):Prism.languages.css.selector={pattern:Prism.languages.css.selector,inside:{"pseudo-class":/:[\w-]+/,"pseudo-element":/::[\w-]+/}}),Prism.languages.markup){Prism.languages.markup.tag.inside.tag.inside["tag-id"]=/[\w-]+/;var s={HTML:{a:1,abbr:1,acronym:1,b:1,basefont:1,bdo:1,big:1,blink:1,cite:1,code:1,dfn:1,em:1,kbd:1,i:1,rp:1,rt:1,ruby:1,s:1,samp:1,small:1,spacer:1,strike:1,strong:1,sub:1,sup:1,time:1,tt:1,u:1,var:1,wbr:1,noframes:1,summary:1,command:1,dt:1,dd:1,figure:1,figcaption:1,center:1,section:1,nav:1,article:1,aside:1,hgroup:1,header:1,footer:1,address:1,noscript:1,isIndex:1,main:1,mark:1,marquee:1,meter:1,menu:1},SVG:{animateColor:1,animateMotion:1,animateTransform:1,glyph:1,feBlend:1,feColorMatrix:1,feComponentTransfer:1,feFuncR:1,feFuncG:1,feFuncB:1,feFuncA:1,feComposite:1,feConvolveMatrix:1,feDiffuseLighting:1,feDisplacementMap:1,feFlood:1,feGaussianBlur:1,feImage:1,feMerge:1,feMergeNode:1,feMorphology:1,feOffset:1,feSpecularLighting:1,feTile:1,feTurbulence:1,feDistantLight:1,fePointLight:1,feSpotLight:1,linearGradient:1,radialGradient:1,altGlyph:1,textPath:1,tref:1,altglyph:1,textpath:1,altglyphdef:1,altglyphitem:1,clipPath:1,"color-profile":1,cursor:1,"font-face":1,"font-face-format":1,"font-face-name":1,"font-face-src":1,"font-face-uri":1,foreignObject:1,glyphRef:1,hkern:1,vkern:1},MathML:{}}}var a;Prism.hooks.add("wrap",function(e){if(("tag-id"==e.type||"property"==e.type&&0!=e.content.indexOf("-")||"rule"==e.type&&0!=e.content.indexOf("@-")||"pseudo-class"==e.type&&0!=e.content.indexOf(":-")||"pseudo-element"==e.type&&0!=e.content.indexOf("::-")||"attr-name"==e.type&&0!=e.content.indexOf("data-"))&&-1===e.content.indexOf("<")&&("css"==e.language||"scss"==e.language||"markup"==e.language)){var t="https://webplatform.github.io/docs/",n=e.content;if("css"==e.language||"scss"==e.language)t+="css/","property"==e.type?t+="properties/":"rule"==e.type?(t+="atrules/",n=n.substring(1)):"pseudo-class"==e.type?(t+="selectors/pseudo-classes/",n=n.substring(1)):"pseudo-element"==e.type&&(t+="selectors/pseudo-elements/",n=n.substring(2));else if("markup"==e.language)if("tag-id"==e.type){if(!(a=function(e){var t=e.toLowerCase();{if(s.HTML[t])return"html";if(s.SVG[e])return"svg";if(s.MathML[e])return"mathml"}if(0!==s.HTML[t]&&"undefined"!=typeof document){var n=(document.createElement(e).toString().match(/\[object HTML(.+)Element\]/)||[])[1];if(n&&"Unknown"!=n)return s.HTML[t]=1,"html"}if((s.HTML[t]=0)!==s.SVG[e]&&"undefined"!=typeof document){var a=(document.createElementNS("http://www.w3.org/2000/svg",e).toString().match(/\[object SVG(.+)Element\]/)||[])[1];if(a&&"Unknown"!=a)return s.SVG[e]=1,"svg"}if((s.SVG[e]=0)!==s.MathML[e]&&0===e.indexOf("m"))return s.MathML[e]=1,"mathml";return s.MathML[e]=0,null}(e.content)||a))return;t+=a+"/elements/"}else if("attr-name"==e.type){if(!a)return;t+=a+"/attributes/"}t+=n,e.tag="a",e.attributes.href=t,e.attributes.target="_blank"}})}}();
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 81 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
@@ -14809,24 +21487,24 @@ module.exports = Component.exports
 });
 
 /***/ }),
-/* 17 */
+/* 82 */
 /***/ (function(module, exports, __webpack_require__) {
 
-__webpack_require__(18);
-module.exports = __webpack_require__(90);
+__webpack_require__(83);
+module.exports = __webpack_require__(239);
 
 
 /***/ }),
-/* 18 */
+/* 83 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
 Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_vue_izitoast__ = __webpack_require__(50);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_vue_izitoast__ = __webpack_require__(114);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_vue_izitoast___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0_vue_izitoast__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_izitoast_dist_css_iziToast_min_css__ = __webpack_require__(51);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_izitoast_dist_css_iziToast_min_css__ = __webpack_require__(115);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_izitoast_dist_css_iziToast_min_css___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1_izitoast_dist_css_iziToast_min_css__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__authorization_authorize__ = __webpack_require__(55);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__authorization_authorize__ = __webpack_require__(118);
 
 /**
  * First we will load all of this project's JavaScript dependencies which
@@ -14834,10 +21512,10 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
  * building robust, powerful web applications using Vue and Laravel.
  */
 
-__webpack_require__(19);
-__webpack_require__(41);
+__webpack_require__(84);
+__webpack_require__(105);
 
-window.Vue = __webpack_require__(12);
+window.Vue = __webpack_require__(19);
 
 
 
@@ -14852,19 +21530,19 @@ Vue.use(__WEBPACK_IMPORTED_MODULE_2__authorization_authorize__["a" /* default */
  * or customize the JavaScript scaffolding to fit your unique needs.
  */
 
-Vue.component('question-page', __webpack_require__(57));
+Vue.component('question-page', __webpack_require__(120));
 
 var app = new Vue({
   el: '#app'
 });
 
 /***/ }),
-/* 19 */
+/* 84 */
 /***/ (function(module, exports, __webpack_require__) {
 
 
-window._ = __webpack_require__(20);
-window.Popper = __webpack_require__(4).default;
+window._ = __webpack_require__(85);
+window.Popper = __webpack_require__(11).default;
 
 /**
  * We'll load jQuery and the Bootstrap jQuery plugin which provides support
@@ -14873,9 +21551,9 @@ window.Popper = __webpack_require__(4).default;
  */
 
 try {
-  window.$ = window.jQuery = __webpack_require__(5);
+  window.$ = window.jQuery = __webpack_require__(12);
 
-  __webpack_require__(22);
+  __webpack_require__(86);
 } catch (e) {}
 
 /**
@@ -14884,7 +21562,7 @@ try {
  * CSRF token as a header based on the value of the "XSRF" token cookie.
  */
 
-window.axios = __webpack_require__(23);
+window.axios = __webpack_require__(87);
 
 window.axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
 
@@ -14920,7 +21598,7 @@ if (token) {
 // });
 
 /***/ }),
-/* 20 */
+/* 85 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(global, module) {var __WEBPACK_AMD_DEFINE_RESULT__;/**
@@ -32037,38 +38715,10 @@ if (token) {
   }
 }.call(this));
 
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(2), __webpack_require__(21)(module)))
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1), __webpack_require__(10)(module)))
 
 /***/ }),
-/* 21 */
-/***/ (function(module, exports) {
-
-module.exports = function(module) {
-	if(!module.webpackPolyfill) {
-		module.deprecate = function() {};
-		module.paths = [];
-		// module.parent = undefined by default
-		if(!module.children) module.children = [];
-		Object.defineProperty(module, "loaded", {
-			enumerable: true,
-			get: function() {
-				return module.l;
-			}
-		});
-		Object.defineProperty(module, "id", {
-			enumerable: true,
-			get: function() {
-				return module.i;
-			}
-		});
-		module.webpackPolyfill = 1;
-	}
-	return module;
-};
-
-
-/***/ }),
-/* 22 */
+/* 86 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /*!
@@ -32077,7 +38727,7 @@ module.exports = function(module) {
   * Licensed under MIT (https://github.com/twbs/bootstrap/blob/master/LICENSE)
   */
 (function (global, factory) {
-   true ? factory(exports, __webpack_require__(5), __webpack_require__(4)) :
+   true ? factory(exports, __webpack_require__(12), __webpack_require__(11)) :
   typeof define === 'function' && define.amd ? define(['exports', 'jquery', 'popper.js'], factory) :
   (global = global || self, factory(global.bootstrap = {}, global.jQuery, global.Popper));
 }(this, (function (exports, $, Popper) { 'use strict';
@@ -36494,22 +43144,22 @@ module.exports = function(module) {
 
 
 /***/ }),
-/* 23 */
+/* 87 */
 /***/ (function(module, exports, __webpack_require__) {
 
-module.exports = __webpack_require__(24);
+module.exports = __webpack_require__(88);
 
 /***/ }),
-/* 24 */
+/* 88 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
-var bind = __webpack_require__(6);
-var Axios = __webpack_require__(26);
-var defaults = __webpack_require__(3);
+var utils = __webpack_require__(4);
+var bind = __webpack_require__(13);
+var Axios = __webpack_require__(90);
+var defaults = __webpack_require__(6);
 
 /**
  * Create an instance of Axios
@@ -36542,15 +43192,15 @@ axios.create = function create(instanceConfig) {
 };
 
 // Expose Cancel & CancelToken
-axios.Cancel = __webpack_require__(11);
-axios.CancelToken = __webpack_require__(39);
-axios.isCancel = __webpack_require__(10);
+axios.Cancel = __webpack_require__(18);
+axios.CancelToken = __webpack_require__(103);
+axios.isCancel = __webpack_require__(17);
 
 // Expose all/spread
 axios.all = function all(promises) {
   return Promise.all(promises);
 };
-axios.spread = __webpack_require__(40);
+axios.spread = __webpack_require__(104);
 
 module.exports = axios;
 
@@ -36559,7 +43209,7 @@ module.exports.default = axios;
 
 
 /***/ }),
-/* 25 */
+/* 89 */
 /***/ (function(module, exports) {
 
 /*!
@@ -36576,16 +43226,16 @@ module.exports = function isBuffer (obj) {
 
 
 /***/ }),
-/* 26 */
+/* 90 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var defaults = __webpack_require__(3);
-var utils = __webpack_require__(0);
-var InterceptorManager = __webpack_require__(34);
-var dispatchRequest = __webpack_require__(35);
+var defaults = __webpack_require__(6);
+var utils = __webpack_require__(4);
+var InterceptorManager = __webpack_require__(98);
+var dispatchRequest = __webpack_require__(99);
 
 /**
  * Create a new instance of Axios
@@ -36662,13 +43312,13 @@ module.exports = Axios;
 
 
 /***/ }),
-/* 27 */
+/* 91 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(4);
 
 module.exports = function normalizeHeaderName(headers, normalizedName) {
   utils.forEach(headers, function processHeader(value, name) {
@@ -36681,13 +43331,13 @@ module.exports = function normalizeHeaderName(headers, normalizedName) {
 
 
 /***/ }),
-/* 28 */
+/* 92 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var createError = __webpack_require__(9);
+var createError = __webpack_require__(16);
 
 /**
  * Resolve or reject a Promise based on response status.
@@ -36714,7 +43364,7 @@ module.exports = function settle(resolve, reject, response) {
 
 
 /***/ }),
-/* 29 */
+/* 93 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -36742,13 +43392,13 @@ module.exports = function enhanceError(error, config, code, request, response) {
 
 
 /***/ }),
-/* 30 */
+/* 94 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(4);
 
 function encode(val) {
   return encodeURIComponent(val).
@@ -36815,13 +43465,13 @@ module.exports = function buildURL(url, params, paramsSerializer) {
 
 
 /***/ }),
-/* 31 */
+/* 95 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(4);
 
 // Headers whose duplicates are ignored by node
 // c.f. https://nodejs.org/api/http.html#http_message_headers
@@ -36875,13 +43525,13 @@ module.exports = function parseHeaders(headers) {
 
 
 /***/ }),
-/* 32 */
+/* 96 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(4);
 
 module.exports = (
   utils.isStandardBrowserEnv() ?
@@ -36950,13 +43600,13 @@ module.exports = (
 
 
 /***/ }),
-/* 33 */
+/* 97 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(4);
 
 module.exports = (
   utils.isStandardBrowserEnv() ?
@@ -37010,13 +43660,13 @@ module.exports = (
 
 
 /***/ }),
-/* 34 */
+/* 98 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(4);
 
 function InterceptorManager() {
   this.handlers = [];
@@ -37069,18 +43719,18 @@ module.exports = InterceptorManager;
 
 
 /***/ }),
-/* 35 */
+/* 99 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
-var transformData = __webpack_require__(36);
-var isCancel = __webpack_require__(10);
-var defaults = __webpack_require__(3);
-var isAbsoluteURL = __webpack_require__(37);
-var combineURLs = __webpack_require__(38);
+var utils = __webpack_require__(4);
+var transformData = __webpack_require__(100);
+var isCancel = __webpack_require__(17);
+var defaults = __webpack_require__(6);
+var isAbsoluteURL = __webpack_require__(101);
+var combineURLs = __webpack_require__(102);
 
 /**
  * Throws a `Cancel` if cancellation has been requested.
@@ -37162,13 +43812,13 @@ module.exports = function dispatchRequest(config) {
 
 
 /***/ }),
-/* 36 */
+/* 100 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var utils = __webpack_require__(0);
+var utils = __webpack_require__(4);
 
 /**
  * Transform the data for a request or a response
@@ -37189,7 +43839,7 @@ module.exports = function transformData(data, headers, fns) {
 
 
 /***/ }),
-/* 37 */
+/* 101 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -37210,7 +43860,7 @@ module.exports = function isAbsoluteURL(url) {
 
 
 /***/ }),
-/* 38 */
+/* 102 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -37231,13 +43881,13 @@ module.exports = function combineURLs(baseURL, relativeURL) {
 
 
 /***/ }),
-/* 39 */
+/* 103 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var Cancel = __webpack_require__(11);
+var Cancel = __webpack_require__(18);
 
 /**
  * A `CancelToken` is an object that can be used to request cancellation of an operation.
@@ -37295,7 +43945,7 @@ module.exports = CancelToken;
 
 
 /***/ }),
-/* 40 */
+/* 104 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -37329,19 +43979,19 @@ module.exports = function spread(callback) {
 
 
 /***/ }),
-/* 41 */
+/* 105 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
 Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__fortawesome_fontawesome__ = __webpack_require__(42);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__fortawesome_fontawesome_free_solid_faCaretUp__ = __webpack_require__(43);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__fortawesome_fontawesome__ = __webpack_require__(106);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__fortawesome_fontawesome_free_solid_faCaretUp__ = __webpack_require__(107);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__fortawesome_fontawesome_free_solid_faCaretUp___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1__fortawesome_fontawesome_free_solid_faCaretUp__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__fortawesome_fontawesome_free_solid_faCaretDown__ = __webpack_require__(44);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__fortawesome_fontawesome_free_solid_faCaretDown__ = __webpack_require__(108);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__fortawesome_fontawesome_free_solid_faCaretDown___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_2__fortawesome_fontawesome_free_solid_faCaretDown__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__fortawesome_fontawesome_free_solid_faStar__ = __webpack_require__(45);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__fortawesome_fontawesome_free_solid_faStar__ = __webpack_require__(109);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__fortawesome_fontawesome_free_solid_faStar___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_3__fortawesome_fontawesome_free_solid_faStar__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__fortawesome_fontawesome_free_solid_faCheck__ = __webpack_require__(46);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__fortawesome_fontawesome_free_solid_faCheck__ = __webpack_require__(110);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__fortawesome_fontawesome_free_solid_faCheck___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_4__fortawesome_fontawesome_free_solid_faCheck__);
 
 
@@ -37352,7 +44002,7 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 __WEBPACK_IMPORTED_MODULE_0__fortawesome_fontawesome__["a" /* default */].library.add([__WEBPACK_IMPORTED_MODULE_1__fortawesome_fontawesome_free_solid_faCaretUp___default.a, __WEBPACK_IMPORTED_MODULE_2__fortawesome_fontawesome_free_solid_faCaretDown___default.a, __WEBPACK_IMPORTED_MODULE_4__fortawesome_fontawesome_free_solid_faCheck___default.a, __WEBPACK_IMPORTED_MODULE_3__fortawesome_fontawesome_free_solid_faStar___default.a]);
 
 /***/ }),
-/* 42 */
+/* 106 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
@@ -39173,31 +45823,31 @@ var config = api$1.config;
 
 
 /***/ }),
-/* 43 */
+/* 107 */
 /***/ (function(module, exports) {
 
 module.exports = { prefix: 'fas', iconName: 'caret-up', icon: [320, 512, [], "f0d8", "M288.662 352H31.338c-17.818 0-26.741-21.543-14.142-34.142l128.662-128.662c7.81-7.81 20.474-7.81 28.284 0l128.662 128.662c12.6 12.599 3.676 34.142-14.142 34.142z"] };
 
 /***/ }),
-/* 44 */
+/* 108 */
 /***/ (function(module, exports) {
 
 module.exports = { prefix: 'fas', iconName: 'caret-down', icon: [320, 512, [], "f0d7", "M31.3 192h257.3c17.8 0 26.7 21.5 14.1 34.1L174.1 354.8c-7.8 7.8-20.5 7.8-28.3 0L17.2 226.1C4.6 213.5 13.5 192 31.3 192z"] };
 
 /***/ }),
-/* 45 */
+/* 109 */
 /***/ (function(module, exports) {
 
 module.exports = { prefix: 'fas', iconName: 'star', icon: [576, 512, [], "f005", "M259.3 17.8L194 150.2 47.9 171.5c-26.2 3.8-36.7 36.1-17.7 54.6l105.7 103-25 145.5c-4.5 26.3 23.2 46 46.4 33.7L288 439.6l130.7 68.7c23.2 12.2 50.9-7.4 46.4-33.7l-25-145.5 105.7-103c19-18.5 8.5-50.8-17.7-54.6L382 150.2 316.7 17.8c-11.7-23.6-45.6-23.9-57.4 0z"] };
 
 /***/ }),
-/* 46 */
+/* 110 */
 /***/ (function(module, exports) {
 
 module.exports = { prefix: 'fas', iconName: 'check', icon: [512, 512, [], "f00c", "M173.898 439.404l-166.4-166.4c-9.997-9.997-9.997-26.206 0-36.204l36.203-36.204c9.997-9.998 26.207-9.998 36.204 0L192 312.69 432.095 72.596c9.997-9.997 26.207-9.997 36.204 0l36.203 36.204c9.997 9.997 9.997 26.206 0 36.204l-294.4 294.401c-9.998 9.997-26.207 9.997-36.204-.001z"] };
 
 /***/ }),
-/* 47 */
+/* 111 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -51161,10 +57811,10 @@ Vue.compile = compileToFunctions;
 
 module.exports = Vue;
 
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(2), __webpack_require__(48).setImmediate))
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1), __webpack_require__(112).setImmediate))
 
 /***/ }),
-/* 48 */
+/* 112 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(global) {var scope = (typeof global !== "undefined" && global) ||
@@ -51220,7 +57870,7 @@ exports._unrefActive = exports.active = function(item) {
 };
 
 // setimmediate attaches itself to the global object
-__webpack_require__(49);
+__webpack_require__(113);
 // On some exotic environments, it's not clear which object `setimmediate` was
 // able to install onto.  Search each possibility in the same order as the
 // `setimmediate` library.
@@ -51231,10 +57881,10 @@ exports.clearImmediate = (typeof self !== "undefined" && self.clearImmediate) ||
                          (typeof global !== "undefined" && global.clearImmediate) ||
                          (this && this.clearImmediate);
 
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(2)))
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
 
 /***/ }),
-/* 49 */
+/* 113 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(global, process) {(function (global, undefined) {
@@ -51424,22 +58074,22 @@ exports.clearImmediate = (typeof self !== "undefined" && self.clearImmediate) ||
     attachTo.clearImmediate = clearImmediate;
 }(typeof self === "undefined" ? typeof global === "undefined" ? this : global : self));
 
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(2), __webpack_require__(7)))
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1), __webpack_require__(14)))
 
 /***/ }),
-/* 50 */
+/* 114 */
 /***/ (function(module, exports, __webpack_require__) {
 
 !function(t,e){ true?module.exports=e():"function"==typeof define&&define.amd?define([],e):"object"==typeof exports?exports.VueIziToast=e():t.VueIziToast=e()}("undefined"!=typeof self?self:this,function(){return function(t){var e={};function i(o){if(e[o])return e[o].exports;var n=e[o]={i:o,l:!1,exports:{}};return t[o].call(n.exports,n,n.exports,i),n.l=!0,n.exports}return i.m=t,i.c=e,i.d=function(t,e,o){i.o(t,e)||Object.defineProperty(t,e,{enumerable:!0,get:o})},i.r=function(t){"undefined"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(t,Symbol.toStringTag,{value:"Module"}),Object.defineProperty(t,"__esModule",{value:!0})},i.t=function(t,e){if(1&e&&(t=i(t)),8&e)return t;if(4&e&&"object"==typeof t&&t&&t.__esModule)return t;var o=Object.create(null);if(i.r(o),Object.defineProperty(o,"default",{enumerable:!0,value:t}),2&e&&"string"!=typeof t)for(var n in t)i.d(o,n,function(e){return t[e]}.bind(null,n));return o},i.n=function(t){var e=t&&t.__esModule?function(){return t.default}:function(){return t};return i.d(e,"a",e),e},i.o=function(t,e){return Object.prototype.hasOwnProperty.call(t,e)},i.p="",i(i.s=4)}([function(t,e){t.exports=function(t,e,i){return e in t?Object.defineProperty(t,e,{value:i,enumerable:!0,configurable:!0,writable:!0}):t[e]=i,t}},function(t,e){function i(t,e){for(var i=0;i<e.length;i++){var o=e[i];o.enumerable=o.enumerable||!1,o.configurable=!0,"value"in o&&(o.writable=!0),Object.defineProperty(t,o.key,o)}}t.exports=function(t,e,o){return e&&i(t.prototype,e),o&&i(t,o),t}},function(t,e){t.exports=function(t,e){if(!(t instanceof e))throw new TypeError("Cannot call a class as a function")}},function(t,e,i){(function(i){var o,n,s;void 0!==i||window||this.window||this.global,n=[],o=function(t){"use strict";var e={},i=(document.querySelector("body"),!!/Mobi/.test(navigator.userAgent)),o=/Chrome/.test(navigator.userAgent)&&/Google Inc/.test(navigator.vendor),n="undefined"!=typeof InstallTrigger,s="ontouchstart"in document.documentElement,a=["bottomRight","bottomLeft","bottomCenter","topRight","topLeft","topCenter","center"],r={};e.children={};var l={id:null,class:"",title:"",titleColor:"",titleSize:"",titleLineHeight:"",message:"",messageColor:"",messageSize:"",messageLineHeight:"",backgroundColor:"",theme:"light",color:"",icon:"",iconText:"",iconColor:"",iconUrl:null,image:"",imageWidth:50,maxWidth:null,zindex:null,layout:1,balloon:!1,close:!0,closeOnEscape:!1,closeOnClick:!1,displayMode:0,position:"bottomRight",target:"",targetFirst:!0,timeout:5e3,rtl:!1,animateInside:!0,drag:!0,pauseOnHover:!0,resetOnHover:!1,progressBar:!0,progressBarColor:"",progressBarEasing:"linear",overlay:!1,overlayClose:!1,overlayColor:"rgba(0, 0, 0, 0.6)",transitionIn:"fadeInUp",transitionOut:"fadeOut",transitionInMobile:"fadeInUp",transitionOutMobile:"fadeOutDown",buttons:{},inputs:{},onOpening:function(){},onOpened:function(){},onClosing:function(){},onClosed:function(){}};if("remove"in Element.prototype||(Element.prototype.remove=function(){this.parentNode&&this.parentNode.removeChild(this)}),"function"!=typeof window.CustomEvent){var c=function(t,e){e=e||{bubbles:!1,cancelable:!1,detail:void 0};var i=document.createEvent("CustomEvent");return i.initCustomEvent(t,e.bubbles,e.cancelable,e.detail),i};c.prototype=window.Event.prototype,window.CustomEvent=c}var u=function(t,e,i){if("[object Object]"===Object.prototype.toString.call(t))for(var o in t)Object.prototype.hasOwnProperty.call(t,o)&&e.call(i,t[o],o,t);else if(t)for(var n=0,s=t.length;n<s;n++)e.call(i,t[n],n,t)},d=function(t,e){var i={};return u(t,function(e,o){i[o]=t[o]}),u(e,function(t,o){i[o]=e[o]}),i},p=function(t){var e=document.createDocumentFragment(),i=document.createElement("div");for(i.innerHTML=t;i.firstChild;)e.appendChild(i.firstChild);return e},m={move:function(t,e,i,s){var a;0!==s&&(t.classList.add("iziToast-dragged"),t.style.transform="translateX("+s+"px)",s>0?(a=(180-s)/180)<.3&&e.hide(d(i,{transitionOut:"fadeOutRight",transitionOutMobile:"fadeOutRight"}),t,"drag"):(a=(180+s)/180)<.3&&e.hide(d(i,{transitionOut:"fadeOutLeft",transitionOutMobile:"fadeOutLeft"}),t,"drag"),t.style.opacity=a,a<.3&&((o||n)&&(t.style.left=s+"px"),t.parentNode.style.opacity=.3,this.stopMoving(t,null)))},startMoving:function(t,e,i,o){o=o||window.event;var n=s?o.touches[0].clientX:o.clientX,a=t.style.transform.replace("px)",""),r=n-(a=a.replace("translateX(",""));i.transitionIn&&t.classList.remove(i.transitionIn),i.transitionInMobile&&t.classList.remove(i.transitionInMobile),t.style.transition="",s?document.ontouchmove=function(o){o.preventDefault();var n=(o=o||window.event).touches[0].clientX-r;m.move(t,e,i,n)}:document.onmousemove=function(o){o.preventDefault();var n=(o=o||window.event).clientX-r;m.move(t,e,i,n)}},stopMoving:function(t,e){s?document.ontouchmove=function(){}:document.onmousemove=function(){},t.style.opacity="",t.style.transform="",t.classList.contains("iziToast-dragged")&&(t.classList.remove("iziToast-dragged"),t.style.transition="transform 0.4s ease, opacity 0.4s ease",setTimeout(function(){t.style.transition=""},400))}};return e.setSetting=function(t,i,o){e.children[t][i]=o},e.getSetting=function(t,i){return e.children[t][i]},e.destroy=function(){u(document.querySelectorAll(".iziToast-overlay"),function(t,e){t.remove()}),u(document.querySelectorAll(".iziToast-wrapper"),function(t,e){t.remove()}),u(document.querySelectorAll(".iziToast"),function(t,e){t.remove()}),this.children={},document.removeEventListener("iziToast-opened",{},!1),document.removeEventListener("iziToast-opening",{},!1),document.removeEventListener("iziToast-closing",{},!1),document.removeEventListener("iziToast-closed",{},!1),document.removeEventListener("keyup",{},!1),r={}},e.settings=function(t){e.destroy(),r=t,l=d(l,t||{})},u({info:{color:"blue",icon:"ico-info"},success:{color:"green",icon:"ico-success"},warning:{color:"orange",icon:"ico-warning"},error:{color:"red",icon:"ico-error"},question:{color:"yellow",icon:"ico-question"}},function(t,i){e[i]=function(e){var i=d(r,e||{});i=d(t,i||{}),this.show(i)}}),e.progress=function(t,e,i){var o=this,n=e.getAttribute("data-iziToast-ref"),s=d(this.children[n],t||{}),a=e.querySelector(".iziToast-progressbar div");return{start:function(){void 0===s.time.REMAINING&&(e.classList.remove("iziToast-reseted"),null!==a&&(a.style.transition="width "+s.timeout+"ms "+s.progressBarEasing,a.style.width="0%"),s.time.START=(new Date).getTime(),s.time.END=s.time.START+s.timeout,s.time.TIMER=setTimeout(function(){clearTimeout(s.time.TIMER),e.classList.contains("iziToast-closing")||(o.hide(s,e,"timeout"),"function"==typeof i&&i.apply(o))},s.timeout),o.setSetting(n,"time",s.time))},pause:function(){if(void 0!==s.time.START&&!e.classList.contains("iziToast-paused")&&!e.classList.contains("iziToast-reseted")){if(e.classList.add("iziToast-paused"),s.time.REMAINING=s.time.END-(new Date).getTime(),clearTimeout(s.time.TIMER),o.setSetting(n,"time",s.time),null!==a){var t=window.getComputedStyle(a).getPropertyValue("width");a.style.transition="none",a.style.width=t}"function"==typeof i&&setTimeout(function(){i.apply(o)},10)}},resume:function(){void 0!==s.time.REMAINING?(e.classList.remove("iziToast-paused"),null!==a&&(a.style.transition="width "+s.time.REMAINING+"ms "+s.progressBarEasing,a.style.width="0%"),s.time.END=(new Date).getTime()+s.time.REMAINING,s.time.TIMER=setTimeout(function(){clearTimeout(s.time.TIMER),e.classList.contains("iziToast-closing")||(o.hide(s,e,"timeout"),"function"==typeof i&&i.apply(o))},s.time.REMAINING),o.setSetting(n,"time",s.time)):this.start()},reset:function(){clearTimeout(s.time.TIMER),delete s.time.REMAINING,o.setSetting(n,"time",s.time),e.classList.add("iziToast-reseted"),e.classList.remove("iziToast-paused"),null!==a&&(a.style.transition="none",a.style.width="100%"),"function"==typeof i&&setTimeout(function(){i.apply(o)},10)}}},e.hide=function(t,e,o){"object"!=typeof e&&(e=document.querySelector(e));var n=this,s=d(this.children[e.getAttribute("data-iziToast-ref")],t||{});s.closedBy=o||null,delete s.time.REMAINING,e.classList.add("iziToast-closing"),function(){var t=document.querySelector(".iziToast-overlay");if(null!==t){var e=t.getAttribute("data-iziToast-ref"),i=(e=e.split(",")).indexOf(String(s.ref));-1!==i&&e.splice(i,1),t.setAttribute("data-iziToast-ref",e.join()),0===e.length&&(t.classList.remove("fadeIn"),t.classList.add("fadeOut"),setTimeout(function(){t.remove()},700))}}(),s.transitionIn&&e.classList.remove(s.transitionIn),s.transitionInMobile&&e.classList.remove(s.transitionInMobile),i||window.innerWidth<=568?s.transitionOutMobile&&e.classList.add(s.transitionOutMobile):s.transitionOut&&e.classList.add(s.transitionOut);var a=e.parentNode.offsetHeight;e.parentNode.style.height=a+"px",e.style.pointerEvents="none",(!i||window.innerWidth>568)&&(e.parentNode.style.transitionDelay="0.2s");try{var r=new CustomEvent("iziToast-closing",{detail:s,bubbles:!0,cancelable:!0});document.dispatchEvent(r)}catch(t){console.warn(t)}setTimeout(function(){e.parentNode.style.height="0px",e.parentNode.style.overflow="",setTimeout(function(){delete n.children[s.ref],e.parentNode.remove();try{var t=new CustomEvent("iziToast-closed",{detail:s,bubbles:!0,cancelable:!0});document.dispatchEvent(t)}catch(t){console.warn(t)}void 0!==s.onClosed&&s.onClosed.apply(null,[s,e,o])},1e3)},200),void 0!==s.onClosing&&s.onClosing.apply(null,[s,e,o])},e.show=function(t){var o,n=this,c=d(r,t||{});if((c=d(l,c)).time={},null===c.id&&(c.id=(o=c.title+c.message+c.color,btoa(encodeURIComponent(o)).replace(/=/g,""))),1===c.displayMode||"once"==c.displayMode)try{if(document.querySelectorAll(".iziToast#"+c.id).length>0)return!1}catch(t){console.warn("[iziToast] Could not find an element with this selector: #"+c.id+". Try to set an valid id.")}if(2===c.displayMode||"replace"==c.displayMode)try{u(document.querySelectorAll(".iziToast#"+c.id),function(t,e){n.hide(c,t,"replaced")})}catch(t){console.warn("[iziToast] Could not find an element with this selector: #"+c.id+". Try to set an valid id.")}c.ref=(new Date).getTime()+Math.floor(1e7*Math.random()+1),e.children[c.ref]=c;var f,g={body:document.querySelector("body"),overlay:document.createElement("div"),toast:document.createElement("div"),toastBody:document.createElement("div"),toastTexts:document.createElement("div"),toastCapsule:document.createElement("div"),cover:document.createElement("div"),buttons:document.createElement("div"),inputs:document.createElement("div"),icon:c.iconUrl?document.createElement("img"):document.createElement("i"),wrapper:null};g.toast.setAttribute("data-iziToast-ref",c.ref),g.toast.appendChild(g.toastBody),g.toastCapsule.appendChild(g.toast),function(){if(g.toast.classList.add("iziToast"),g.toast.classList.add("iziToast-opening"),g.toastCapsule.classList.add("iziToast-capsule"),g.toastBody.classList.add("iziToast-body"),g.toastTexts.classList.add("iziToast-texts"),i||window.innerWidth<=568?c.transitionInMobile&&g.toast.classList.add(c.transitionInMobile):c.transitionIn&&g.toast.classList.add(c.transitionIn),c.class){var t=c.class.split(" ");u(t,function(t,e){g.toast.classList.add(t)})}var e;c.id&&(g.toast.id=c.id),c.rtl&&(g.toast.classList.add("iziToast-rtl"),g.toast.setAttribute("dir","rtl")),c.layout>1&&g.toast.classList.add("iziToast-layout"+c.layout),c.balloon&&g.toast.classList.add("iziToast-balloon"),c.maxWidth&&(isNaN(c.maxWidth)?g.toast.style.maxWidth=c.maxWidth:g.toast.style.maxWidth=c.maxWidth+"px"),""===c.theme&&"light"===c.theme||g.toast.classList.add("iziToast-theme-"+c.theme),c.color&&("#"==(e=c.color).substring(0,1)||"rgb"==e.substring(0,3)||"hsl"==e.substring(0,3)?g.toast.style.background=c.color:g.toast.classList.add("iziToast-color-"+c.color)),c.backgroundColor&&(g.toast.style.background=c.backgroundColor,c.balloon&&(g.toast.style.borderColor=c.backgroundColor))}(),c.image&&(g.cover.classList.add("iziToast-cover"),g.cover.style.width=c.imageWidth+"px",function(t){try{return btoa(atob(t))==t}catch(t){return!1}}(c.image.replace(/ /g,""))?g.cover.style.backgroundImage="url(data:image/png;base64,"+c.image.replace(/ /g,"")+")":g.cover.style.backgroundImage="url("+c.image+")",c.rtl?g.toastBody.style.marginRight=c.imageWidth+10+"px":g.toastBody.style.marginLeft=c.imageWidth+10+"px",g.toast.appendChild(g.cover)),c.close?(g.buttonClose=document.createElement("button"),g.buttonClose.type="button",g.buttonClose.classList.add("iziToast-close"),g.buttonClose.addEventListener("click",function(t){t.target,n.hide(c,g.toast,"button")}),g.toast.appendChild(g.buttonClose)):c.rtl?g.toast.style.paddingLeft="18px":g.toast.style.paddingRight="18px",c.progressBar&&(g.progressBar=document.createElement("div"),g.progressBarDiv=document.createElement("div"),g.progressBar.classList.add("iziToast-progressbar"),g.progressBarDiv.style.background=c.progressBarColor,g.progressBar.appendChild(g.progressBarDiv),g.toast.appendChild(g.progressBar)),c.timeout&&(c.pauseOnHover&&!c.resetOnHover&&(g.toast.addEventListener("mouseenter",function(t){n.progress(c,g.toast).pause()}),g.toast.addEventListener("mouseleave",function(t){n.progress(c,g.toast).resume()})),c.resetOnHover&&(g.toast.addEventListener("mouseenter",function(t){n.progress(c,g.toast).reset()}),g.toast.addEventListener("mouseleave",function(t){n.progress(c,g.toast).start()}))),c.iconUrl?(g.icon.setAttribute("class","iziToast-icon"),g.icon.setAttribute("src",c.iconUrl)):c.icon&&(g.icon.setAttribute("class","iziToast-icon "+c.icon),c.iconText&&g.icon.appendChild(document.createTextNode(c.iconText)),c.iconColor&&(g.icon.style.color=c.iconColor)),(c.icon||c.iconUrl)&&(c.rtl?g.toastBody.style.paddingRight="33px":g.toastBody.style.paddingLeft="33px",g.toastBody.appendChild(g.icon)),c.title.length>0&&(g.strong=document.createElement("strong"),g.strong.classList.add("iziToast-title"),g.strong.appendChild(p(c.title)),g.toastTexts.appendChild(g.strong),c.titleColor&&(g.strong.style.color=c.titleColor),c.titleSize&&(isNaN(c.titleSize)?g.strong.style.fontSize=c.titleSize:g.strong.style.fontSize=c.titleSize+"px"),c.titleLineHeight&&(isNaN(c.titleSize)?g.strong.style.lineHeight=c.titleLineHeight:g.strong.style.lineHeight=c.titleLineHeight+"px")),c.message.length>0&&(g.p=document.createElement("p"),g.p.classList.add("iziToast-message"),g.p.appendChild(p(c.message)),g.toastTexts.appendChild(g.p),c.messageColor&&(g.p.style.color=c.messageColor),c.messageSize&&(isNaN(c.titleSize)?g.p.style.fontSize=c.messageSize:g.p.style.fontSize=c.messageSize+"px"),c.messageLineHeight&&(isNaN(c.titleSize)?g.p.style.lineHeight=c.messageLineHeight:g.p.style.lineHeight=c.messageLineHeight+"px")),c.title.length>0&&c.message.length>0&&(c.rtl?g.strong.style.marginLeft="10px":2===c.layout||c.rtl||(g.strong.style.marginRight="10px")),g.toastBody.appendChild(g.toastTexts),c.inputs.length>0&&(g.inputs.classList.add("iziToast-inputs"),u(c.inputs,function(t,e){g.inputs.appendChild(p(t[0])),(f=g.inputs.childNodes)[e].classList.add("iziToast-inputs-child"),t[3]&&setTimeout(function(){f[e].focus()},300),f[e].addEventListener(t[1],function(e){return(0,t[2])(n,g.toast,this,e)})}),g.toastBody.appendChild(g.inputs)),c.buttons.length>0&&(g.buttons.classList.add("iziToast-buttons"),u(c.buttons,function(t,e){g.buttons.appendChild(p(t[0]));var i=g.buttons.childNodes;i[e].classList.add("iziToast-buttons-child"),t[2]&&setTimeout(function(){i[e].focus()},300),i[e].addEventListener("click",function(e){return e.preventDefault(),(0,t[1])(n,g.toast,this,e,f)})})),g.toastBody.appendChild(g.buttons),c.message.length>0&&(c.inputs.length>0||c.buttons.length>0)&&(g.p.style.marginBottom="0"),(c.inputs.length>0||c.buttons.length>0)&&(c.rtl?g.toastTexts.style.marginLeft="10px":g.toastTexts.style.marginRight="10px",c.inputs.length>0&&c.buttons.length>0&&(c.rtl?g.inputs.style.marginLeft="8px":g.inputs.style.marginRight="8px")),g.toastCapsule.style.visibility="hidden",setTimeout(function(){var t=g.toast.offsetHeight,e=g.toast.currentStyle||window.getComputedStyle(g.toast),i=e.marginTop;i=i.split("px"),i=parseInt(i[0]);var o=e.marginBottom;o=o.split("px"),o=parseInt(o[0]),g.toastCapsule.style.visibility="",g.toastCapsule.style.height=t+o+i+"px",setTimeout(function(){g.toastCapsule.style.height="auto",c.target&&(g.toastCapsule.style.overflow="visible")},500),c.timeout&&n.progress(c,g.toast).start()},100),function(){var t=c.position;if(c.target)g.wrapper=document.querySelector(c.target),g.wrapper.classList.add("iziToast-target"),c.targetFirst?g.wrapper.insertBefore(g.toastCapsule,g.wrapper.firstChild):g.wrapper.appendChild(g.toastCapsule);else{if(-1==a.indexOf(c.position))return void console.warn("[iziToast] Incorrect position.\nIt can be › "+a);t=i||window.innerWidth<=568?"bottomLeft"==c.position||"bottomRight"==c.position||"bottomCenter"==c.position?"iziToast-wrapper-bottomCenter":"topLeft"==c.position||"topRight"==c.position||"topCenter"==c.position?"iziToast-wrapper-topCenter":"iziToast-wrapper-center":"iziToast-wrapper-"+t,g.wrapper=document.querySelector(".iziToast-wrapper."+t),g.wrapper||(g.wrapper=document.createElement("div"),g.wrapper.classList.add("iziToast-wrapper"),g.wrapper.classList.add(t),document.body.appendChild(g.wrapper)),"topLeft"==c.position||"topCenter"==c.position||"topRight"==c.position?g.wrapper.insertBefore(g.toastCapsule,g.wrapper.firstChild):g.wrapper.appendChild(g.toastCapsule)}isNaN(c.zindex)?console.warn("[iziToast] Invalid zIndex."):g.wrapper.style.zIndex=c.zindex}(),c.overlay&&(null!==document.querySelector(".iziToast-overlay.fadeIn")?(g.overlay=document.querySelector(".iziToast-overlay"),g.overlay.setAttribute("data-iziToast-ref",g.overlay.getAttribute("data-iziToast-ref")+","+c.ref),isNaN(c.zindex)||null===c.zindex||(g.overlay.style.zIndex=c.zindex-1)):(g.overlay.classList.add("iziToast-overlay"),g.overlay.classList.add("fadeIn"),g.overlay.style.background=c.overlayColor,g.overlay.setAttribute("data-iziToast-ref",c.ref),isNaN(c.zindex)||null===c.zindex||(g.overlay.style.zIndex=c.zindex-1),document.querySelector("body").appendChild(g.overlay)),c.overlayClose?(g.overlay.removeEventListener("click",{}),g.overlay.addEventListener("click",function(t){n.hide(c,g.toast,"overlay")})):g.overlay.removeEventListener("click",{})),function(){if(c.animateInside){g.toast.classList.add("iziToast-animateInside");var t=[200,100,300];"bounceInLeft"!=c.transitionIn&&"bounceInRight"!=c.transitionIn||(t=[400,200,400]),c.title.length>0&&setTimeout(function(){g.strong.classList.add("slideIn")},t[0]),c.message.length>0&&setTimeout(function(){g.p.classList.add("slideIn")},t[1]),(c.icon||c.iconUrl)&&setTimeout(function(){g.icon.classList.add("revealIn")},t[2]);var e=150;c.buttons.length>0&&g.buttons&&setTimeout(function(){u(g.buttons.childNodes,function(t,i){setTimeout(function(){t.classList.add("revealIn")},e),e+=150})},c.inputs.length>0?150:0),c.inputs.length>0&&g.inputs&&(e=150,u(g.inputs.childNodes,function(t,i){setTimeout(function(){t.classList.add("revealIn")},e),e+=150}))}}(),c.onOpening.apply(null,[c,g.toast]);try{var v=new CustomEvent("iziToast-opening",{detail:c,bubbles:!0,cancelable:!0});document.dispatchEvent(v)}catch(t){console.warn(t)}setTimeout(function(){g.toast.classList.remove("iziToast-opening"),g.toast.classList.add("iziToast-opened");try{var t=new CustomEvent("iziToast-opened",{detail:c,bubbles:!0,cancelable:!0});document.dispatchEvent(t)}catch(t){console.warn(t)}c.onOpened.apply(null,[c,g.toast])},1e3),c.drag&&(s?(g.toast.addEventListener("touchstart",function(t){m.startMoving(this,n,c,t)},!1),g.toast.addEventListener("touchend",function(t){m.stopMoving(this,t)},!1)):(g.toast.addEventListener("mousedown",function(t){t.preventDefault(),m.startMoving(this,n,c,t)},!1),g.toast.addEventListener("mouseup",function(t){t.preventDefault(),m.stopMoving(this,t)},!1))),c.closeOnEscape&&document.addEventListener("keyup",function(t){27==(t=t||window.event).keyCode&&n.hide(c,g.toast,"esc")}),c.closeOnClick&&g.toast.addEventListener("click",function(t){n.hide(c,g.toast,"toast")}),n.toast=g.toast},e}(),void 0===(s="function"==typeof o?o.apply(e,n):o)||(t.exports=s)}).call(this,i(6))},function(t,e,i){t.exports=i(5)},function(t,e,i){"use strict";i.r(e),i.d(e,"devMode",function(){return p}),i.d(e,"default",function(){return m}),i.d(e,"install",function(){return f});var o=i(2),n=i.n(o),s=i(1),a=i.n(s),r=i(0),l=i.n(r),c=i(3),u=i.n(c);function d(t,e){var i=Object.keys(t);if(Object.getOwnPropertySymbols){var o=Object.getOwnPropertySymbols(t);e&&(o=o.filter(function(e){return Object.getOwnPropertyDescriptor(t,e).enumerable})),i.push.apply(i,o)}return i}function p(){return!1}var m=function(){function t(){var e=arguments.length>0&&void 0!==arguments[0]?arguments[0]:{};n()(this,t),l()(this,"_izi",u.a),l()(this,"accessorName","toast"),l()(this,"initialized",!1);this.options=function(t){for(var e=1;e<arguments.length;e++){var i=null!=arguments[e]?arguments[e]:{};e%2?d(i,!0).forEach(function(e){l()(t,e,i[e])}):Object.getOwnPropertyDescriptors?Object.defineProperties(t,Object.getOwnPropertyDescriptors(i)):d(i).forEach(function(e){Object.defineProperty(t,e,Object.getOwnPropertyDescriptor(i,e))})}return t}({},{zindex:99999,layout:1,balloon:!1,close:!0,closeOnEscape:!1,rtl:!1,position:"bottomRight",timeout:5e3,animateInside:!0,drag:!0,pauseOnHover:!0,resetOnHover:!1,transitionIn:"fadeInUp",transitionOut:"fadeOut",transitionInMobile:"fadeInUp",transitionOutMobile:"fadeOutDown",buttons:{},inputs:{},onOpening:function(){},onOpened:function(){},onClosing:function(){},onClosed:function(){}},{},e),this._izi.settings(this.options)}return a()(t,null,[{key:"_checkParams",value:function(t,e,i){var o=arguments.length>3&&void 0!==arguments[3]?arguments[3]:null,n=o?" Method signature: ".concat(o,"(message: string, title: string, options: IzitoastOptions)"):"";if(!t||t.constructor!==String)throw"Message must be a string.".concat(n);if(e&&e.constructor!==String)throw"Title must be a string.".concat(n);if(i&&i.constructor!==Object)throw"Options must be a object.".concat(n)}},{key:"_checkEventNames",value:function(t){if(!t||t.constructor!==String)throw"Event Name must be a string";if("iziToast-open"!==t&&"iziToast-close"!==t)throw"Event Name has only two possible values: iziToast-open or iziToast-close"}},{key:"_initToast",value:function(t){return t&&t.constructor!==String&&(t=document.querySelector(t)),t&&t.constructor===HTMLDivElement||(t=document.querySelector(".iziToast")),t}},{key:"_validateOptions",value:function(t){if(t&&t.constructor!==Object)throw"Options must be a object"}},{key:"_validateCallback",value:function(t){if(t&&t.constructor!==Function)throw"Callback must be a function"}}]),a()(t,[{key:"init",value:function(t){this.initialized||(this.initialized=!0)}},{key:"show",value:function(e){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:"",o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:{};t._checkParams(e,i,o,"show"),this._izi.show(Object.assign({},o,{message:e,title:i}))}},{key:"hide",value:function(){var e=arguments.length>0&&void 0!==arguments[0]?arguments[0]:null,i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:{};e=t._initToast(e),t._validateOptions(i),this._izi.hide(i,e)}},{key:"progress",value:function(e){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:{},o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:function(){};return e=t._initToast(e),t._validateOptions(i),t._validateCallback(o),this._izi.progress(e,i,o)}},{key:"destroy",value:function(){this._izi.destroy()}},{key:"info",value:function(e){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:"",o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:{};t._checkParams(e,i,o,"info"),this._izi.info(Object.assign({},o,{message:e,title:i}))}},{key:"success",value:function(e){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:"",o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:{};t._checkParams(e,i,o,"success"),this._izi.success(Object.assign({},o,{message:e,title:i}))}},{key:"warning",value:function(e){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:"",o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:{};t._checkParams(e,i,o,"warning"),this._izi.warning(Object.assign({},o,{message:e,title:i}))}},{key:"error",value:function(e){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:"",o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:{};t._checkParams(e,i,o,"error"),this._izi.error(Object.assign({},o,{message:e,title:i}))}},{key:"question",value:function(e){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:"",o=arguments.length>2&&void 0!==arguments[2]?arguments[2]:{};t._checkParams(e,i,o,"question"),this._izi.question(Object.assign({},o,{message:e,title:i}))}},{key:"on",value:function(e,i){t._checkEventNames(e),t._validateCallback(i),document.addEventListener(e,i)}},{key:"off",value:function(e){var i=arguments.length>1&&void 0!==arguments[1]?arguments[1]:function(){};t._checkEventNames(e),document.removeEventListener(e,i)}}]),t}();function f(t){var e=arguments.length>1&&void 0!==arguments[1]?arguments[1]:{};if(e&&e.constructor!==Object)throw"Options must be a object";if(!f.installed||!t){var i=new m(e);Object.defineProperty(t.prototype,i.accessorName,{get:function(){return i}}),t.mixin({beforeCreate:function(){var e=this.$options.parent,o=null;e&&e.__$VueIziToastInstance?(o=e.__$VueIziToastInstance).init(t):o=i,o&&(this.__$VueIziToastInstance=o,this["$".concat(o.accessorName)]=o)}}),f.installed=!0}}m.install=f,"undefined"!=typeof window&&window.Vue&&window.Vue.use(m)},function(t,e){var i;i=function(){return this}();try{i=i||new Function("return this")()}catch(t){"object"==typeof window&&(i=window)}t.exports=i}])});
 
 /***/ }),
-/* 51 */
+/* 115 */
 /***/ (function(module, exports, __webpack_require__) {
 
 // style-loader: Adds some css to the DOM by adding a <style> tag
 
 // load the styles
-var content = __webpack_require__(52);
+var content = __webpack_require__(116);
 if(typeof content === 'string') content = [[module.i, content, '']];
 // Prepare cssTransformation
 var transform;
@@ -51447,7 +58097,7 @@ var transform;
 var options = {}
 options.transform = transform
 // add the styles to the DOM
-var update = __webpack_require__(53)(content, options);
+var update = __webpack_require__(3)(content, options);
 if(content.locals) module.exports = content.locals;
 // Hot Module Replacement
 if(false) {
@@ -51464,10 +58114,10 @@ if(false) {
 }
 
 /***/ }),
-/* 52 */
+/* 116 */
 /***/ (function(module, exports, __webpack_require__) {
 
-exports = module.exports = __webpack_require__(13)(false);
+exports = module.exports = __webpack_require__(2)(false);
 // imports
 
 
@@ -51478,366 +58128,7 @@ exports.push([module.i, "/*\r\n* iziToast | v1.4.0\r\n* http://izitoast.marcelod
 
 
 /***/ }),
-/* 53 */
-/***/ (function(module, exports, __webpack_require__) {
-
-/*
-	MIT License http://www.opensource.org/licenses/mit-license.php
-	Author Tobias Koppers @sokra
-*/
-
-var stylesInDom = {};
-
-var	memoize = function (fn) {
-	var memo;
-
-	return function () {
-		if (typeof memo === "undefined") memo = fn.apply(this, arguments);
-		return memo;
-	};
-};
-
-var isOldIE = memoize(function () {
-	// Test for IE <= 9 as proposed by Browserhacks
-	// @see http://browserhacks.com/#hack-e71d8692f65334173fee715c222cb805
-	// Tests for existence of standard globals is to allow style-loader
-	// to operate correctly into non-standard environments
-	// @see https://github.com/webpack-contrib/style-loader/issues/177
-	return window && document && document.all && !window.atob;
-});
-
-var getElement = (function (fn) {
-	var memo = {};
-
-	return function(selector) {
-		if (typeof memo[selector] === "undefined") {
-			memo[selector] = fn.call(this, selector);
-		}
-
-		return memo[selector]
-	};
-})(function (target) {
-	return document.querySelector(target)
-});
-
-var singleton = null;
-var	singletonCounter = 0;
-var	stylesInsertedAtTop = [];
-
-var	fixUrls = __webpack_require__(54);
-
-module.exports = function(list, options) {
-	if (typeof DEBUG !== "undefined" && DEBUG) {
-		if (typeof document !== "object") throw new Error("The style-loader cannot be used in a non-browser environment");
-	}
-
-	options = options || {};
-
-	options.attrs = typeof options.attrs === "object" ? options.attrs : {};
-
-	// Force single-tag solution on IE6-9, which has a hard limit on the # of <style>
-	// tags it will allow on a page
-	if (!options.singleton) options.singleton = isOldIE();
-
-	// By default, add <style> tags to the <head> element
-	if (!options.insertInto) options.insertInto = "head";
-
-	// By default, add <style> tags to the bottom of the target
-	if (!options.insertAt) options.insertAt = "bottom";
-
-	var styles = listToStyles(list, options);
-
-	addStylesToDom(styles, options);
-
-	return function update (newList) {
-		var mayRemove = [];
-
-		for (var i = 0; i < styles.length; i++) {
-			var item = styles[i];
-			var domStyle = stylesInDom[item.id];
-
-			domStyle.refs--;
-			mayRemove.push(domStyle);
-		}
-
-		if(newList) {
-			var newStyles = listToStyles(newList, options);
-			addStylesToDom(newStyles, options);
-		}
-
-		for (var i = 0; i < mayRemove.length; i++) {
-			var domStyle = mayRemove[i];
-
-			if(domStyle.refs === 0) {
-				for (var j = 0; j < domStyle.parts.length; j++) domStyle.parts[j]();
-
-				delete stylesInDom[domStyle.id];
-			}
-		}
-	};
-};
-
-function addStylesToDom (styles, options) {
-	for (var i = 0; i < styles.length; i++) {
-		var item = styles[i];
-		var domStyle = stylesInDom[item.id];
-
-		if(domStyle) {
-			domStyle.refs++;
-
-			for(var j = 0; j < domStyle.parts.length; j++) {
-				domStyle.parts[j](item.parts[j]);
-			}
-
-			for(; j < item.parts.length; j++) {
-				domStyle.parts.push(addStyle(item.parts[j], options));
-			}
-		} else {
-			var parts = [];
-
-			for(var j = 0; j < item.parts.length; j++) {
-				parts.push(addStyle(item.parts[j], options));
-			}
-
-			stylesInDom[item.id] = {id: item.id, refs: 1, parts: parts};
-		}
-	}
-}
-
-function listToStyles (list, options) {
-	var styles = [];
-	var newStyles = {};
-
-	for (var i = 0; i < list.length; i++) {
-		var item = list[i];
-		var id = options.base ? item[0] + options.base : item[0];
-		var css = item[1];
-		var media = item[2];
-		var sourceMap = item[3];
-		var part = {css: css, media: media, sourceMap: sourceMap};
-
-		if(!newStyles[id]) styles.push(newStyles[id] = {id: id, parts: [part]});
-		else newStyles[id].parts.push(part);
-	}
-
-	return styles;
-}
-
-function insertStyleElement (options, style) {
-	var target = getElement(options.insertInto)
-
-	if (!target) {
-		throw new Error("Couldn't find a style target. This probably means that the value for the 'insertInto' parameter is invalid.");
-	}
-
-	var lastStyleElementInsertedAtTop = stylesInsertedAtTop[stylesInsertedAtTop.length - 1];
-
-	if (options.insertAt === "top") {
-		if (!lastStyleElementInsertedAtTop) {
-			target.insertBefore(style, target.firstChild);
-		} else if (lastStyleElementInsertedAtTop.nextSibling) {
-			target.insertBefore(style, lastStyleElementInsertedAtTop.nextSibling);
-		} else {
-			target.appendChild(style);
-		}
-		stylesInsertedAtTop.push(style);
-	} else if (options.insertAt === "bottom") {
-		target.appendChild(style);
-	} else {
-		throw new Error("Invalid value for parameter 'insertAt'. Must be 'top' or 'bottom'.");
-	}
-}
-
-function removeStyleElement (style) {
-	if (style.parentNode === null) return false;
-	style.parentNode.removeChild(style);
-
-	var idx = stylesInsertedAtTop.indexOf(style);
-	if(idx >= 0) {
-		stylesInsertedAtTop.splice(idx, 1);
-	}
-}
-
-function createStyleElement (options) {
-	var style = document.createElement("style");
-
-	options.attrs.type = "text/css";
-
-	addAttrs(style, options.attrs);
-	insertStyleElement(options, style);
-
-	return style;
-}
-
-function createLinkElement (options) {
-	var link = document.createElement("link");
-
-	options.attrs.type = "text/css";
-	options.attrs.rel = "stylesheet";
-
-	addAttrs(link, options.attrs);
-	insertStyleElement(options, link);
-
-	return link;
-}
-
-function addAttrs (el, attrs) {
-	Object.keys(attrs).forEach(function (key) {
-		el.setAttribute(key, attrs[key]);
-	});
-}
-
-function addStyle (obj, options) {
-	var style, update, remove, result;
-
-	// If a transform function was defined, run it on the css
-	if (options.transform && obj.css) {
-	    result = options.transform(obj.css);
-
-	    if (result) {
-	    	// If transform returns a value, use that instead of the original css.
-	    	// This allows running runtime transformations on the css.
-	    	obj.css = result;
-	    } else {
-	    	// If the transform function returns a falsy value, don't add this css.
-	    	// This allows conditional loading of css
-	    	return function() {
-	    		// noop
-	    	};
-	    }
-	}
-
-	if (options.singleton) {
-		var styleIndex = singletonCounter++;
-
-		style = singleton || (singleton = createStyleElement(options));
-
-		update = applyToSingletonTag.bind(null, style, styleIndex, false);
-		remove = applyToSingletonTag.bind(null, style, styleIndex, true);
-
-	} else if (
-		obj.sourceMap &&
-		typeof URL === "function" &&
-		typeof URL.createObjectURL === "function" &&
-		typeof URL.revokeObjectURL === "function" &&
-		typeof Blob === "function" &&
-		typeof btoa === "function"
-	) {
-		style = createLinkElement(options);
-		update = updateLink.bind(null, style, options);
-		remove = function () {
-			removeStyleElement(style);
-
-			if(style.href) URL.revokeObjectURL(style.href);
-		};
-	} else {
-		style = createStyleElement(options);
-		update = applyToTag.bind(null, style);
-		remove = function () {
-			removeStyleElement(style);
-		};
-	}
-
-	update(obj);
-
-	return function updateStyle (newObj) {
-		if (newObj) {
-			if (
-				newObj.css === obj.css &&
-				newObj.media === obj.media &&
-				newObj.sourceMap === obj.sourceMap
-			) {
-				return;
-			}
-
-			update(obj = newObj);
-		} else {
-			remove();
-		}
-	};
-}
-
-var replaceText = (function () {
-	var textStore = [];
-
-	return function (index, replacement) {
-		textStore[index] = replacement;
-
-		return textStore.filter(Boolean).join('\n');
-	};
-})();
-
-function applyToSingletonTag (style, index, remove, obj) {
-	var css = remove ? "" : obj.css;
-
-	if (style.styleSheet) {
-		style.styleSheet.cssText = replaceText(index, css);
-	} else {
-		var cssNode = document.createTextNode(css);
-		var childNodes = style.childNodes;
-
-		if (childNodes[index]) style.removeChild(childNodes[index]);
-
-		if (childNodes.length) {
-			style.insertBefore(cssNode, childNodes[index]);
-		} else {
-			style.appendChild(cssNode);
-		}
-	}
-}
-
-function applyToTag (style, obj) {
-	var css = obj.css;
-	var media = obj.media;
-
-	if(media) {
-		style.setAttribute("media", media)
-	}
-
-	if(style.styleSheet) {
-		style.styleSheet.cssText = css;
-	} else {
-		while(style.firstChild) {
-			style.removeChild(style.firstChild);
-		}
-
-		style.appendChild(document.createTextNode(css));
-	}
-}
-
-function updateLink (link, options, obj) {
-	var css = obj.css;
-	var sourceMap = obj.sourceMap;
-
-	/*
-		If convertToAbsoluteUrls isn't defined, but sourcemaps are enabled
-		and there is no publicPath defined then lets turn convertToAbsoluteUrls
-		on by default.  Otherwise default to the convertToAbsoluteUrls option
-		directly
-	*/
-	var autoFixUrls = options.convertToAbsoluteUrls === undefined && sourceMap;
-
-	if (options.convertToAbsoluteUrls || autoFixUrls) {
-		css = fixUrls(css);
-	}
-
-	if (sourceMap) {
-		// http://stackoverflow.com/a/26603875
-		css += "\n/*# sourceMappingURL=data:application/json;base64," + btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap)))) + " */";
-	}
-
-	var blob = new Blob([css], { type: "text/css" });
-
-	var oldSrc = link.href;
-
-	link.href = URL.createObjectURL(blob);
-
-	if(oldSrc) URL.revokeObjectURL(oldSrc);
-}
-
-
-/***/ }),
-/* 54 */
+/* 117 */
 /***/ (function(module, exports) {
 
 
@@ -51932,11 +58223,11 @@ module.exports = function (css) {
 
 
 /***/ }),
-/* 55 */
+/* 118 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__policies__ = __webpack_require__(56);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__policies__ = __webpack_require__(119);
 var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
 
 
@@ -51957,7 +58248,7 @@ var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol
 });
 
 /***/ }),
-/* 56 */
+/* 119 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
@@ -51974,15 +58265,15 @@ var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol
 });
 
 /***/ }),
-/* 57 */
+/* 120 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var disposed = false
-var normalizeComponent = __webpack_require__(1)
+var normalizeComponent = __webpack_require__(5)
 /* script */
-var __vue_script__ = __webpack_require__(58)
+var __vue_script__ = __webpack_require__(121)
 /* template */
-var __vue_template__ = __webpack_require__(89)
+var __vue_template__ = __webpack_require__(238)
 /* template functional */
 var __vue_template_functional__ = false
 /* styles */
@@ -52021,14 +58312,14 @@ module.exports = Component.exports
 
 
 /***/ }),
-/* 58 */
+/* 121 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
 Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__components_Question_vue__ = __webpack_require__(59);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__components_Question_vue__ = __webpack_require__(122);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__components_Question_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0__components_Question_vue__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__components_Answers_vue__ = __webpack_require__(76);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__components_Answers_vue__ = __webpack_require__(225);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__components_Answers_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1__components_Answers_vue__);
 //
 //
@@ -52046,15 +58337,15 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 });
 
 /***/ }),
-/* 59 */
+/* 122 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var disposed = false
-var normalizeComponent = __webpack_require__(1)
+var normalizeComponent = __webpack_require__(5)
 /* script */
-var __vue_script__ = __webpack_require__(60)
+var __vue_script__ = __webpack_require__(123)
 /* template */
-var __vue_template__ = __webpack_require__(75)
+var __vue_template__ = __webpack_require__(224)
 /* template functional */
 var __vue_template_functional__ = false
 /* styles */
@@ -52093,18 +58384,18 @@ module.exports = Component.exports
 
 
 /***/ }),
-/* 60 */
+/* 123 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
 Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Vote_vue__ = __webpack_require__(14);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Vote_vue__ = __webpack_require__(20);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Vote_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0__Vote_vue__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue__ = __webpack_require__(15);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue__ = __webpack_require__(21);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1__UserInfo_vue__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__components_MEditor_vue__ = __webpack_require__(72);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__components_MEditor_vue__ = __webpack_require__(135);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__components_MEditor_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_2__components_MEditor_vue__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__mixins_modification_js__ = __webpack_require__(16);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__mixins_modification_js__ = __webpack_require__(81);
 //
 //
 //
@@ -52228,14 +58519,14 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 });
 
 /***/ }),
-/* 61 */
+/* 124 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
 Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Favorite_vue__ = __webpack_require__(62);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Favorite_vue__ = __webpack_require__(125);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Favorite_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0__Favorite_vue__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__Accept_vue__ = __webpack_require__(65);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__Accept_vue__ = __webpack_require__(128);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__Accept_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1__Accept_vue__);
 //
 //
@@ -52320,15 +58611,15 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 });
 
 /***/ }),
-/* 62 */
+/* 125 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var disposed = false
-var normalizeComponent = __webpack_require__(1)
+var normalizeComponent = __webpack_require__(5)
 /* script */
-var __vue_script__ = __webpack_require__(63)
+var __vue_script__ = __webpack_require__(126)
 /* template */
-var __vue_template__ = __webpack_require__(64)
+var __vue_template__ = __webpack_require__(127)
 /* template functional */
 var __vue_template_functional__ = false
 /* styles */
@@ -52367,7 +58658,7 @@ module.exports = Component.exports
 
 
 /***/ }),
-/* 63 */
+/* 126 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
@@ -52433,7 +58724,7 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 });
 
 /***/ }),
-/* 64 */
+/* 127 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var render = function() {
@@ -52472,15 +58763,15 @@ if (false) {
 }
 
 /***/ }),
-/* 65 */
+/* 128 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var disposed = false
-var normalizeComponent = __webpack_require__(1)
+var normalizeComponent = __webpack_require__(5)
 /* script */
-var __vue_script__ = __webpack_require__(66)
+var __vue_script__ = __webpack_require__(129)
 /* template */
-var __vue_template__ = __webpack_require__(68)
+var __vue_template__ = __webpack_require__(131)
 /* template functional */
 var __vue_template_functional__ = false
 /* styles */
@@ -52519,12 +58810,12 @@ module.exports = Component.exports
 
 
 /***/ }),
-/* 66 */
+/* 129 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
 Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__event_bus_js__ = __webpack_require__(67);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__event_bus_js__ = __webpack_require__(130);
 //
 //
 //
@@ -52592,11 +58883,11 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 });
 
 /***/ }),
-/* 67 */
+/* 130 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_vue__ = __webpack_require__(12);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_vue__ = __webpack_require__(19);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0_vue__);
 
 
@@ -52605,7 +58896,7 @@ var eventBus = new __WEBPACK_IMPORTED_MODULE_0_vue___default.a();
 /* harmony default export */ __webpack_exports__["a"] = (eventBus);
 
 /***/ }),
-/* 68 */
+/* 131 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var render = function() {
@@ -52655,7 +58946,7 @@ if (false) {
 }
 
 /***/ }),
-/* 69 */
+/* 132 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var render = function() {
@@ -52718,7 +59009,7 @@ if (false) {
 }
 
 /***/ }),
-/* 70 */
+/* 133 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
@@ -52759,7 +59050,7 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 });
 
 /***/ }),
-/* 71 */
+/* 134 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var render = function() {
@@ -52799,15 +59090,15 @@ if (false) {
 }
 
 /***/ }),
-/* 72 */
+/* 135 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var disposed = false
-var normalizeComponent = __webpack_require__(1)
+var normalizeComponent = __webpack_require__(5)
 /* script */
-var __vue_script__ = __webpack_require__(73)
+var __vue_script__ = __webpack_require__(136)
 /* template */
-var __vue_template__ = __webpack_require__(74)
+var __vue_template__ = __webpack_require__(223)
 /* template functional */
 var __vue_template_functional__ = false
 /* styles */
@@ -52846,15 +59137,19 @@ module.exports = Component.exports
 
 
 /***/ }),
-/* 73 */
+/* 136 */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
 Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_markdown_it__ = __webpack_require__(104);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_markdown_it__ = __webpack_require__(137);
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0_markdown_it___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0_markdown_it__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_autosize__ = __webpack_require__(159);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_autosize___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1_autosize__);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_markdown_it_prism__ = __webpack_require__(192);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1_markdown_it_prism___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1_markdown_it_prism__);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2_autosize__ = __webpack_require__(220);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2_autosize___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_2_autosize__);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3_prismjs_themes_prism_css__ = __webpack_require__(221);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3_prismjs_themes_prism_css___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_3_prismjs_themes_prism_css__);
 //
 //
 //
@@ -52876,10 +59171,13 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 //
 //
 //
+
+
 
 
 
 var md = new __WEBPACK_IMPORTED_MODULE_0_markdown_it___default.a();
+md.use(__WEBPACK_IMPORTED_MODULE_1_markdown_it_prism___default.a);
 /* harmony default export */ __webpack_exports__["default"] = ({
     props: ["body"],
 
@@ -52890,2591 +59188,26 @@ var md = new __WEBPACK_IMPORTED_MODULE_0_markdown_it___default.a();
     },
 
     mounted: function mounted() {
-        __WEBPACK_IMPORTED_MODULE_1_autosize___default()(this.$el.querySelector("textarea"));
+        __WEBPACK_IMPORTED_MODULE_2_autosize___default()(this.$el.querySelector("textarea"));
     },
     updated: function updated() {
-        __WEBPACK_IMPORTED_MODULE_1_autosize___default()(this.$el.querySelector("textarea"));
+        __WEBPACK_IMPORTED_MODULE_2_autosize___default()(this.$el.querySelector("textarea"));
     }
 });
 
 /***/ }),
-/* 74 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var render = function() {
-  var _vm = this
-  var _h = _vm.$createElement
-  var _c = _vm._self._c || _h
-  return _c("div", { staticClass: "card" }, [
-    _vm._m(0),
-    _vm._v(" "),
-    _c("div", { staticClass: "card-body tab-content" }, [
-      _c(
-        "div",
-        { staticClass: "tab-pane active", attrs: { id: "write" } },
-        [_vm._t("default")],
-        2
-      ),
-      _vm._v(" "),
-      _c("div", {
-        staticClass: "tab-pane",
-        attrs: { id: "preview" },
-        domProps: { innerHTML: _vm._s(_vm.preview) }
-      })
-    ])
-  ])
-}
-var staticRenderFns = [
-  function() {
-    var _vm = this
-    var _h = _vm.$createElement
-    var _c = _vm._self._c || _h
-    return _c("div", { staticClass: "card-header" }, [
-      _c("ul", { staticClass: "nav nav-tabs card-header-tabs" }, [
-        _c("li", { staticClass: "nav-item" }, [
-          _c(
-            "a",
-            {
-              staticClass: "nav-link active",
-              attrs: { "data-toggle": "tab", href: "#write" }
-            },
-            [_vm._v("Write")]
-          )
-        ]),
-        _vm._v(" "),
-        _c("li", { staticClass: "nav-item" }, [
-          _c(
-            "a",
-            {
-              staticClass: "nav-link",
-              attrs: { "data-toggle": "tab", href: "#preview" }
-            },
-            [_vm._v("Preview")]
-          )
-        ])
-      ])
-    ])
-  }
-]
-render._withStripped = true
-module.exports = { render: render, staticRenderFns: staticRenderFns }
-if (false) {
-  module.hot.accept()
-  if (module.hot.data) {
-    require("vue-hot-reload-api")      .rerender("data-v-7e98915a", module.exports)
-  }
-}
-
-/***/ }),
-/* 75 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var render = function() {
-  var _vm = this
-  var _h = _vm.$createElement
-  var _c = _vm._self._c || _h
-  return _c("div", { staticClass: "row justify-content-center" }, [
-    _c("div", { staticClass: "col-md-12" }, [
-      _c("div", { staticClass: "card" }, [
-        _vm.editing
-          ? _c("form", { staticClass: "card-body" }, [
-              _c("div", { staticClass: "card-title" }, [
-                _c("input", {
-                  directives: [
-                    {
-                      name: "model",
-                      rawName: "v-model",
-                      value: _vm.title,
-                      expression: "title"
-                    }
-                  ],
-                  staticClass: "form-control form-control-lg",
-                  attrs: { type: "text" },
-                  domProps: { value: _vm.title },
-                  on: {
-                    input: function($event) {
-                      if ($event.target.composing) {
-                        return
-                      }
-                      _vm.title = $event.target.value
-                    }
-                  }
-                })
-              ]),
-              _vm._v(" "),
-              _c("hr"),
-              _vm._v(" "),
-              _c("div", { staticClass: "media" }, [
-                _c("div", { staticClass: "media-body" }, [
-                  _c(
-                    "div",
-                    { staticClass: "form-group" },
-                    [
-                      _c("m-editor", { attrs: { body: _vm.body } }, [
-                        _c("textarea", {
-                          directives: [
-                            {
-                              name: "model",
-                              rawName: "v-model",
-                              value: _vm.body,
-                              expression: "body"
-                            }
-                          ],
-                          staticClass: "form-control",
-                          attrs: { rows: "10", required: "" },
-                          domProps: { value: _vm.body },
-                          on: {
-                            input: function($event) {
-                              if ($event.target.composing) {
-                                return
-                              }
-                              _vm.body = $event.target.value
-                            }
-                          }
-                        })
-                      ])
-                    ],
-                    1
-                  ),
-                  _vm._v(" "),
-                  _c(
-                    "button",
-                    {
-                      staticClass: "btn btn-primary",
-                      attrs: { type: "button", disabled: _vm.isInvalid },
-                      on: {
-                        click: function($event) {
-                          $event.preventDefault()
-                          return _vm.update($event)
-                        }
-                      }
-                    },
-                    [_vm._v("Update")]
-                  ),
-                  _vm._v(" "),
-                  _c(
-                    "button",
-                    {
-                      staticClass: "btn btn-outline-secondary",
-                      on: {
-                        click: function($event) {
-                          $event.preventDefault()
-                          return _vm.cancel($event)
-                        }
-                      }
-                    },
-                    [_vm._v("Cancel")]
-                  )
-                ])
-              ])
-            ])
-          : _c("div", { staticClass: "card-body" }, [
-              _c("div", { staticClass: "card-title" }, [
-                _c("div", { staticClass: "d-flex align-items-center" }, [
-                  _c("h1", [_vm._v(_vm._s(_vm.title))]),
-                  _vm._v(" "),
-                  _vm._m(0)
-                ])
-              ]),
-              _vm._v(" "),
-              _c("hr"),
-              _vm._v(" "),
-              _c(
-                "div",
-                { staticClass: "media" },
-                [
-                  _c("vote", {
-                    attrs: { model: _vm.question, name: "question" }
-                  }),
-                  _vm._v(" "),
-                  _c("div", { staticClass: "media-body" }, [
-                    _c("div", {
-                      domProps: { innerHTML: _vm._s(_vm.bodyhtml) }
-                    }),
-                    _vm._v(" "),
-                    _c("div", { staticClass: "row" }, [
-                      _c("div", { staticClass: "col-4" }, [
-                        _c("div", { staticClass: "ml-auto" }, [
-                          _vm.authorize("modify", _vm.question)
-                            ? _c(
-                                "a",
-                                {
-                                  staticClass: "btn btn-sm btn-outline-info",
-                                  on: {
-                                    click: function($event) {
-                                      $event.preventDefault()
-                                      return _vm.edit($event)
-                                    }
-                                  }
-                                },
-                                [_vm._v("Edit")]
-                              )
-                            : _vm._e(),
-                          _vm._v(" "),
-                          _vm.authorize("deleteQuestion", _vm.question)
-                            ? _c(
-                                "button",
-                                {
-                                  staticClass: "btn btn-sm btn-outline-danger",
-                                  on: { click: _vm.destroy }
-                                },
-                                [_vm._v("Delete")]
-                              )
-                            : _vm._e()
-                        ])
-                      ]),
-                      _vm._v(" "),
-                      _c("div", { staticClass: "col-4" }),
-                      _vm._v(" "),
-                      _c(
-                        "div",
-                        { staticClass: "col-4" },
-                        [
-                          _c("user-info", {
-                            attrs: { model: _vm.question, label: "asked" }
-                          })
-                        ],
-                        1
-                      )
-                    ])
-                  ])
-                ],
-                1
-              )
-            ])
-      ])
-    ])
-  ])
-}
-var staticRenderFns = [
-  function() {
-    var _vm = this
-    var _h = _vm.$createElement
-    var _c = _vm._self._c || _h
-    return _c("div", { staticClass: "ml-auto" }, [
-      _c(
-        "a",
-        {
-          staticClass: "btn btn-outline-secondary",
-          attrs: { href: "/questions" }
-        },
-        [
-          _vm._v(
-            "\n                                Back to all Questions\n                            "
-          )
-        ]
-      )
-    ])
-  }
-]
-render._withStripped = true
-module.exports = { render: render, staticRenderFns: staticRenderFns }
-if (false) {
-  module.hot.accept()
-  if (module.hot.data) {
-    require("vue-hot-reload-api")      .rerender("data-v-417b5bc6", module.exports)
-  }
-}
-
-/***/ }),
-/* 76 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var disposed = false
-function injectStyle (ssrContext) {
-  if (disposed) return
-  __webpack_require__(77)
-}
-var normalizeComponent = __webpack_require__(1)
-/* script */
-var __vue_script__ = __webpack_require__(81)
-/* template */
-var __vue_template__ = __webpack_require__(88)
-/* template functional */
-var __vue_template_functional__ = false
-/* styles */
-var __vue_styles__ = injectStyle
-/* scopeId */
-var __vue_scopeId__ = null
-/* moduleIdentifier (server only) */
-var __vue_module_identifier__ = null
-var Component = normalizeComponent(
-  __vue_script__,
-  __vue_template__,
-  __vue_template_functional__,
-  __vue_styles__,
-  __vue_scopeId__,
-  __vue_module_identifier__
-)
-Component.options.__file = "resources/assets/js/components/Answers.vue"
-
-/* hot reload */
-if (false) {(function () {
-  var hotAPI = require("vue-hot-reload-api")
-  hotAPI.install(require("vue"), false)
-  if (!hotAPI.compatible) return
-  module.hot.accept()
-  if (!module.hot.data) {
-    hotAPI.createRecord("data-v-2fc0920e", Component.options)
-  } else {
-    hotAPI.reload("data-v-2fc0920e", Component.options)
-  }
-  module.hot.dispose(function (data) {
-    disposed = true
-  })
-})()}
-
-module.exports = Component.exports
-
-
-/***/ }),
-/* 77 */
-/***/ (function(module, exports, __webpack_require__) {
-
-// style-loader: Adds some css to the DOM by adding a <style> tag
-
-// load the styles
-var content = __webpack_require__(78);
-if(typeof content === 'string') content = [[module.i, content, '']];
-if(content.locals) module.exports = content.locals;
-// add the styles to the DOM
-var update = __webpack_require__(79)("5a2e9b34", content, false, {});
-// Hot Module Replacement
-if(false) {
- // When the styles change, update the <style> tags
- if(!content.locals) {
-   module.hot.accept("!!../../../../node_modules/css-loader/index.js!../../../../node_modules/vue-loader/lib/style-compiler/index.js?{\"vue\":true,\"id\":\"data-v-2fc0920e\",\"scoped\":false,\"hasInlineConfig\":true}!../../../../node_modules/vue-loader/lib/selector.js?type=styles&index=0!./Answers.vue", function() {
-     var newContent = require("!!../../../../node_modules/css-loader/index.js!../../../../node_modules/vue-loader/lib/style-compiler/index.js?{\"vue\":true,\"id\":\"data-v-2fc0920e\",\"scoped\":false,\"hasInlineConfig\":true}!../../../../node_modules/vue-loader/lib/selector.js?type=styles&index=0!./Answers.vue");
-     if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
-     update(newContent);
-   });
- }
- // When the module is disposed, remove the <style> tags
- module.hot.dispose(function() { update(); });
-}
-
-/***/ }),
-/* 78 */
-/***/ (function(module, exports, __webpack_require__) {
-
-exports = module.exports = __webpack_require__(13)(false);
-// imports
-
-
-// module
-exports.push([module.i, "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n", ""]);
-
-// exports
-
-
-/***/ }),
-/* 79 */
-/***/ (function(module, exports, __webpack_require__) {
-
-/*
-  MIT License http://www.opensource.org/licenses/mit-license.php
-  Author Tobias Koppers @sokra
-  Modified by Evan You @yyx990803
-*/
-
-var hasDocument = typeof document !== 'undefined'
-
-if (typeof DEBUG !== 'undefined' && DEBUG) {
-  if (!hasDocument) {
-    throw new Error(
-    'vue-style-loader cannot be used in a non-browser environment. ' +
-    "Use { target: 'node' } in your Webpack config to indicate a server-rendering environment."
-  ) }
-}
-
-var listToStyles = __webpack_require__(80)
-
-/*
-type StyleObject = {
-  id: number;
-  parts: Array<StyleObjectPart>
-}
-
-type StyleObjectPart = {
-  css: string;
-  media: string;
-  sourceMap: ?string
-}
-*/
-
-var stylesInDom = {/*
-  [id: number]: {
-    id: number,
-    refs: number,
-    parts: Array<(obj?: StyleObjectPart) => void>
-  }
-*/}
-
-var head = hasDocument && (document.head || document.getElementsByTagName('head')[0])
-var singletonElement = null
-var singletonCounter = 0
-var isProduction = false
-var noop = function () {}
-var options = null
-var ssrIdKey = 'data-vue-ssr-id'
-
-// Force single-tag solution on IE6-9, which has a hard limit on the # of <style>
-// tags it will allow on a page
-var isOldIE = typeof navigator !== 'undefined' && /msie [6-9]\b/.test(navigator.userAgent.toLowerCase())
-
-module.exports = function (parentId, list, _isProduction, _options) {
-  isProduction = _isProduction
-
-  options = _options || {}
-
-  var styles = listToStyles(parentId, list)
-  addStylesToDom(styles)
-
-  return function update (newList) {
-    var mayRemove = []
-    for (var i = 0; i < styles.length; i++) {
-      var item = styles[i]
-      var domStyle = stylesInDom[item.id]
-      domStyle.refs--
-      mayRemove.push(domStyle)
-    }
-    if (newList) {
-      styles = listToStyles(parentId, newList)
-      addStylesToDom(styles)
-    } else {
-      styles = []
-    }
-    for (var i = 0; i < mayRemove.length; i++) {
-      var domStyle = mayRemove[i]
-      if (domStyle.refs === 0) {
-        for (var j = 0; j < domStyle.parts.length; j++) {
-          domStyle.parts[j]()
-        }
-        delete stylesInDom[domStyle.id]
-      }
-    }
-  }
-}
-
-function addStylesToDom (styles /* Array<StyleObject> */) {
-  for (var i = 0; i < styles.length; i++) {
-    var item = styles[i]
-    var domStyle = stylesInDom[item.id]
-    if (domStyle) {
-      domStyle.refs++
-      for (var j = 0; j < domStyle.parts.length; j++) {
-        domStyle.parts[j](item.parts[j])
-      }
-      for (; j < item.parts.length; j++) {
-        domStyle.parts.push(addStyle(item.parts[j]))
-      }
-      if (domStyle.parts.length > item.parts.length) {
-        domStyle.parts.length = item.parts.length
-      }
-    } else {
-      var parts = []
-      for (var j = 0; j < item.parts.length; j++) {
-        parts.push(addStyle(item.parts[j]))
-      }
-      stylesInDom[item.id] = { id: item.id, refs: 1, parts: parts }
-    }
-  }
-}
-
-function createStyleElement () {
-  var styleElement = document.createElement('style')
-  styleElement.type = 'text/css'
-  head.appendChild(styleElement)
-  return styleElement
-}
-
-function addStyle (obj /* StyleObjectPart */) {
-  var update, remove
-  var styleElement = document.querySelector('style[' + ssrIdKey + '~="' + obj.id + '"]')
-
-  if (styleElement) {
-    if (isProduction) {
-      // has SSR styles and in production mode.
-      // simply do nothing.
-      return noop
-    } else {
-      // has SSR styles but in dev mode.
-      // for some reason Chrome can't handle source map in server-rendered
-      // style tags - source maps in <style> only works if the style tag is
-      // created and inserted dynamically. So we remove the server rendered
-      // styles and inject new ones.
-      styleElement.parentNode.removeChild(styleElement)
-    }
-  }
-
-  if (isOldIE) {
-    // use singleton mode for IE9.
-    var styleIndex = singletonCounter++
-    styleElement = singletonElement || (singletonElement = createStyleElement())
-    update = applyToSingletonTag.bind(null, styleElement, styleIndex, false)
-    remove = applyToSingletonTag.bind(null, styleElement, styleIndex, true)
-  } else {
-    // use multi-style-tag mode in all other cases
-    styleElement = createStyleElement()
-    update = applyToTag.bind(null, styleElement)
-    remove = function () {
-      styleElement.parentNode.removeChild(styleElement)
-    }
-  }
-
-  update(obj)
-
-  return function updateStyle (newObj /* StyleObjectPart */) {
-    if (newObj) {
-      if (newObj.css === obj.css &&
-          newObj.media === obj.media &&
-          newObj.sourceMap === obj.sourceMap) {
-        return
-      }
-      update(obj = newObj)
-    } else {
-      remove()
-    }
-  }
-}
-
-var replaceText = (function () {
-  var textStore = []
-
-  return function (index, replacement) {
-    textStore[index] = replacement
-    return textStore.filter(Boolean).join('\n')
-  }
-})()
-
-function applyToSingletonTag (styleElement, index, remove, obj) {
-  var css = remove ? '' : obj.css
-
-  if (styleElement.styleSheet) {
-    styleElement.styleSheet.cssText = replaceText(index, css)
-  } else {
-    var cssNode = document.createTextNode(css)
-    var childNodes = styleElement.childNodes
-    if (childNodes[index]) styleElement.removeChild(childNodes[index])
-    if (childNodes.length) {
-      styleElement.insertBefore(cssNode, childNodes[index])
-    } else {
-      styleElement.appendChild(cssNode)
-    }
-  }
-}
-
-function applyToTag (styleElement, obj) {
-  var css = obj.css
-  var media = obj.media
-  var sourceMap = obj.sourceMap
-
-  if (media) {
-    styleElement.setAttribute('media', media)
-  }
-  if (options.ssrId) {
-    styleElement.setAttribute(ssrIdKey, obj.id)
-  }
-
-  if (sourceMap) {
-    // https://developer.chrome.com/devtools/docs/javascript-debugging
-    // this makes source maps inside style tags work properly in Chrome
-    css += '\n/*# sourceURL=' + sourceMap.sources[0] + ' */'
-    // http://stackoverflow.com/a/26603875
-    css += '\n/*# sourceMappingURL=data:application/json;base64,' + btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap)))) + ' */'
-  }
-
-  if (styleElement.styleSheet) {
-    styleElement.styleSheet.cssText = css
-  } else {
-    while (styleElement.firstChild) {
-      styleElement.removeChild(styleElement.firstChild)
-    }
-    styleElement.appendChild(document.createTextNode(css))
-  }
-}
-
-
-/***/ }),
-/* 80 */
-/***/ (function(module, exports) {
-
-/**
- * Translates the list format produced by css-loader into something
- * easier to manipulate.
- */
-module.exports = function listToStyles (parentId, list) {
-  var styles = []
-  var newStyles = {}
-  for (var i = 0; i < list.length; i++) {
-    var item = list[i]
-    var id = item[0]
-    var css = item[1]
-    var media = item[2]
-    var sourceMap = item[3]
-    var part = {
-      id: parentId + ':' + i,
-      css: css,
-      media: media,
-      sourceMap: sourceMap
-    }
-    if (!newStyles[id]) {
-      styles.push(newStyles[id] = { id: id, parts: [part] })
-    } else {
-      newStyles[id].parts.push(part)
-    }
-  }
-  return styles
-}
-
-
-/***/ }),
-/* 81 */
-/***/ (function(module, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Answer_vue__ = __webpack_require__(82);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Answer_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0__Answer_vue__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__NewAnswer_vue__ = __webpack_require__(85);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__NewAnswer_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1__NewAnswer_vue__);
-function _toConsumableArray(arr) { if (Array.isArray(arr)) { for (var i = 0, arr2 = Array(arr.length); i < arr.length; i++) { arr2[i] = arr[i]; } return arr2; } else { return Array.from(arr); } }
-
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-
-
-
-
-/* harmony default export */ __webpack_exports__["default"] = ({
-    props: ["question"],
-
-    data: function data() {
-        return {
-            questionId: this.question.id,
-            count: this.question.answers_count,
-            answers: [],
-            nextUrl: null
-        };
-    },
-    created: function created() {
-        this.fetch("/questions/" + this.questionId + "/answers");
-    },
-
-
-    methods: {
-        add: function add(answer) {
-            this.answers.push(answer);
-            this.count++;
-        },
-        fetch: function fetch(endpoint) {
-            var _this = this;
-
-            axios.get(endpoint).then(function (_ref) {
-                var _answers;
-
-                var data = _ref.data;
-
-                (_answers = _this.answers).push.apply(_answers, _toConsumableArray(data.data));
-                _this.nextUrl = data.next_page_url;
-            });
-        },
-        remove: function remove(index) {
-            this.answers.splice(index, 1);
-            this.count--;
-        }
-    },
-
-    computed: {
-        title: function title() {
-            return this.count + " " + (this.count > 1 ? "Answers" : "Answer");
-        }
-    },
-
-    components: {
-        Answer: __WEBPACK_IMPORTED_MODULE_0__Answer_vue___default.a, NewAnswer: __WEBPACK_IMPORTED_MODULE_1__NewAnswer_vue___default.a
-    }
-});
-
-/***/ }),
-/* 82 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var disposed = false
-var normalizeComponent = __webpack_require__(1)
-/* script */
-var __vue_script__ = __webpack_require__(83)
-/* template */
-var __vue_template__ = __webpack_require__(84)
-/* template functional */
-var __vue_template_functional__ = false
-/* styles */
-var __vue_styles__ = null
-/* scopeId */
-var __vue_scopeId__ = null
-/* moduleIdentifier (server only) */
-var __vue_module_identifier__ = null
-var Component = normalizeComponent(
-  __vue_script__,
-  __vue_template__,
-  __vue_template_functional__,
-  __vue_styles__,
-  __vue_scopeId__,
-  __vue_module_identifier__
-)
-Component.options.__file = "resources/assets/js/components/Answer.vue"
-
-/* hot reload */
-if (false) {(function () {
-  var hotAPI = require("vue-hot-reload-api")
-  hotAPI.install(require("vue"), false)
-  if (!hotAPI.compatible) return
-  module.hot.accept()
-  if (!module.hot.data) {
-    hotAPI.createRecord("data-v-3f387496", Component.options)
-  } else {
-    hotAPI.reload("data-v-3f387496", Component.options)
-  }
-  module.hot.dispose(function (data) {
-    disposed = true
-  })
-})()}
-
-module.exports = Component.exports
-
-
-/***/ }),
-/* 83 */
-/***/ (function(module, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Vote_vue__ = __webpack_require__(14);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Vote_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0__Vote_vue__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue__ = __webpack_require__(15);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1__UserInfo_vue__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__mixins_modification_js__ = __webpack_require__(16);
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-
-
-
-
-/* harmony default export */ __webpack_exports__["default"] = ({
-    props: ["answer"],
-
-    mixins: [__WEBPACK_IMPORTED_MODULE_2__mixins_modification_js__["a" /* default */]],
-
-    components: { Vote: __WEBPACK_IMPORTED_MODULE_0__Vote_vue___default.a, UserInfo: __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue___default.a },
-
-    data: function data() {
-        return {
-            body: this.answer.body,
-            bodyhtml: this.answer.bodyhtml,
-            id: this.answer.id,
-            questionId: this.answer.question_id,
-            beforeEditCache: null
-        };
-    },
-
-
-    methods: {
-        setEditCache: function setEditCache() {
-            this.beforeEditCache = this.body;
-        },
-        restoreFromCache: function restoreFromCache() {
-            this.body = this.beforeEditCache;
-        },
-        payload: function payload() {
-            return {
-                body: this.body
-            };
-        },
-        delete: function _delete() {
-            var _this = this;
-
-            axios.delete(this.endpoint).then(function (_ref) {
-                var data = _ref.data;
-
-                _this.$toast.success(data.message, "Success", { timeout: 2000 });
-                _this.$emit("deleted");
-            });
-        }
-    },
-
-    computed: {
-        isInvalid: function isInvalid() {
-            return this.body.length < 10;
-        },
-        endpoint: function endpoint() {
-            return "/questions/" + this.questionId + "/answers/" + this.id;
-        }
-    }
-
-});
-
-/***/ }),
-/* 84 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var render = function() {
-  var _vm = this
-  var _h = _vm.$createElement
-  var _c = _vm._self._c || _h
-  return _c(
-    "div",
-    { staticClass: "media post" },
-    [
-      _c("vote", { attrs: { model: _vm.answer, name: "answer" } }),
-      _vm._v(" "),
-      _c("div", { staticClass: "media-body" }, [
-        _vm.editing
-          ? _c("form", [
-              _c("div", { staticClass: "form-group" }, [
-                _c("textarea", {
-                  directives: [
-                    {
-                      name: "model",
-                      rawName: "v-model",
-                      value: _vm.body,
-                      expression: "body"
-                    }
-                  ],
-                  staticClass: "form-control",
-                  attrs: { rows: "10", required: "" },
-                  domProps: { value: _vm.body },
-                  on: {
-                    input: function($event) {
-                      if ($event.target.composing) {
-                        return
-                      }
-                      _vm.body = $event.target.value
-                    }
-                  }
-                })
-              ]),
-              _vm._v(" "),
-              _c(
-                "button",
-                {
-                  staticClass: "btn btn-primary",
-                  attrs: { type: "button", disabled: _vm.isInvalid },
-                  on: {
-                    click: function($event) {
-                      $event.preventDefault()
-                      return _vm.update($event)
-                    }
-                  }
-                },
-                [_vm._v("Update")]
-              ),
-              _vm._v(" "),
-              _c(
-                "button",
-                {
-                  staticClass: "btn btn-outline-secondary",
-                  on: { click: _vm.cancel }
-                },
-                [_vm._v("Cancel")]
-              )
-            ])
-          : _c("div", [
-              _c("div", { domProps: { innerHTML: _vm._s(_vm.bodyhtml) } }),
-              _vm._v(" "),
-              _c("div", { staticClass: "row" }, [
-                _c("div", { staticClass: "col-4" }, [
-                  _c("div", { staticClass: "ml-auto" }, [
-                    _vm.authorize("modify", _vm.answer)
-                      ? _c(
-                          "a",
-                          {
-                            staticClass: "btn btn-sm btn-outline-info",
-                            on: {
-                              click: function($event) {
-                                $event.preventDefault()
-                                return _vm.edit($event)
-                              }
-                            }
-                          },
-                          [_vm._v("Edit")]
-                        )
-                      : _vm._e(),
-                    _vm._v(" "),
-                    _vm.authorize("modify", _vm.answer)
-                      ? _c(
-                          "button",
-                          {
-                            staticClass: "btn btn-sm btn-outline-danger",
-                            on: { click: _vm.destroy }
-                          },
-                          [_vm._v("Delete")]
-                        )
-                      : _vm._e()
-                  ])
-                ]),
-                _vm._v(" "),
-                _c("div", { staticClass: "col-4" }),
-                _vm._v(" "),
-                _c(
-                  "div",
-                  { staticClass: "col-4" },
-                  [
-                    _c("user-info", {
-                      attrs: { model: _vm.answer, label: "answered" }
-                    })
-                  ],
-                  1
-                )
-              ])
-            ])
-      ])
-    ],
-    1
-  )
-}
-var staticRenderFns = []
-render._withStripped = true
-module.exports = { render: render, staticRenderFns: staticRenderFns }
-if (false) {
-  module.hot.accept()
-  if (module.hot.data) {
-    require("vue-hot-reload-api")      .rerender("data-v-3f387496", module.exports)
-  }
-}
-
-/***/ }),
-/* 85 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var disposed = false
-var normalizeComponent = __webpack_require__(1)
-/* script */
-var __vue_script__ = __webpack_require__(86)
-/* template */
-var __vue_template__ = __webpack_require__(87)
-/* template functional */
-var __vue_template_functional__ = false
-/* styles */
-var __vue_styles__ = null
-/* scopeId */
-var __vue_scopeId__ = null
-/* moduleIdentifier (server only) */
-var __vue_module_identifier__ = null
-var Component = normalizeComponent(
-  __vue_script__,
-  __vue_template__,
-  __vue_template_functional__,
-  __vue_styles__,
-  __vue_scopeId__,
-  __vue_module_identifier__
-)
-Component.options.__file = "resources/assets/js/components/NewAnswer.vue"
-
-/* hot reload */
-if (false) {(function () {
-  var hotAPI = require("vue-hot-reload-api")
-  hotAPI.install(require("vue"), false)
-  if (!hotAPI.compatible) return
-  module.hot.accept()
-  if (!module.hot.data) {
-    hotAPI.createRecord("data-v-96742352", Component.options)
-  } else {
-    hotAPI.reload("data-v-96742352", Component.options)
-  }
-  module.hot.dispose(function (data) {
-    disposed = true
-  })
-})()}
-
-module.exports = Component.exports
-
-
-/***/ }),
-/* 86 */
-/***/ (function(module, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-
-/* harmony default export */ __webpack_exports__["default"] = ({
-    props: ['questionId'],
-
-    methods: {
-        create: function create() {
-            var _this = this;
-
-            axios.post("/questions/" + this.questionId + "/answers", {
-                body: this.body
-            }).catch(function (error) {
-                _this.$toast.error(error.response.data.message, "Error");
-            }).then(function (_ref) {
-                var data = _ref.data;
-
-                _this.$toast.success(data.message, "Success");
-                _this.body = '';
-                _this.$emit('created', data.answer);
-            });
-        }
-    },
-
-    data: function data() {
-        return {
-            body: ''
-        };
-    },
-
-
-    computed: {
-        isInvalid: function isInvalid() {
-            return !this.signedIn || this.body.length < 10;
-        }
-    }
-});
-
-/***/ }),
-/* 87 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var render = function() {
-  var _vm = this
-  var _h = _vm.$createElement
-  var _c = _vm._self._c || _h
-  return _c("div", { staticClass: "row mt-4" }, [
-    _c("div", { staticClass: "col-md-12" }, [
-      _c("div", { staticClass: "card" }, [
-        _c("div", { staticClass: "card-body" }, [
-          _vm._m(0),
-          _vm._v(" "),
-          _c("hr"),
-          _vm._v(" "),
-          _c(
-            "form",
-            {
-              on: {
-                submit: function($event) {
-                  $event.preventDefault()
-                  return _vm.create($event)
-                }
-              }
-            },
-            [
-              _c("div", { staticClass: "form-group" }, [
-                _c("textarea", {
-                  directives: [
-                    {
-                      name: "model",
-                      rawName: "v-model",
-                      value: _vm.body,
-                      expression: "body"
-                    }
-                  ],
-                  staticClass: "form-control",
-                  attrs: { rows: "7", required: "", name: "body" },
-                  domProps: { value: _vm.body },
-                  on: {
-                    input: function($event) {
-                      if ($event.target.composing) {
-                        return
-                      }
-                      _vm.body = $event.target.value
-                    }
-                  }
-                })
-              ]),
-              _vm._v(" "),
-              _c("div", { staticClass: "form-group" }, [
-                _c(
-                  "button",
-                  {
-                    staticClass: "btn btn-lg btn-outline-primary",
-                    attrs: { type: "submit", disabled: _vm.isInvalid }
-                  },
-                  [_vm._v("Submit")]
-                )
-              ])
-            ]
-          )
-        ])
-      ])
-    ])
-  ])
-}
-var staticRenderFns = [
-  function() {
-    var _vm = this
-    var _h = _vm.$createElement
-    var _c = _vm._self._c || _h
-    return _c("div", { staticClass: "card-title" }, [
-      _c("h3", [_vm._v("Your Answer")])
-    ])
-  }
-]
-render._withStripped = true
-module.exports = { render: render, staticRenderFns: staticRenderFns }
-if (false) {
-  module.hot.accept()
-  if (module.hot.data) {
-    require("vue-hot-reload-api")      .rerender("data-v-96742352", module.exports)
-  }
-}
-
-/***/ }),
-/* 88 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var render = function() {
-  var _vm = this
-  var _h = _vm.$createElement
-  var _c = _vm._self._c || _h
-  return _c(
-    "div",
-    [
-      _vm.count
-        ? _c("div", { staticClass: "row mt-4" }, [
-            _c("div", { staticClass: "col-md-12" }, [
-              _c("div", { staticClass: "card" }, [
-                _c(
-                  "div",
-                  { staticClass: "card-body" },
-                  [
-                    _c("div", { staticClass: "card-title" }, [
-                      _c("h2", [_vm._v(_vm._s(_vm.title))])
-                    ]),
-                    _vm._v(" "),
-                    _c("hr"),
-                    _vm._v(" "),
-                    _vm._l(_vm.answers, function(answer, index) {
-                      return _c("answer", {
-                        key: answer.id,
-                        attrs: { answer: answer },
-                        on: {
-                          deleted: function($event) {
-                            return _vm.remove(index)
-                          }
-                        }
-                      })
-                    }),
-                    _vm._v(" "),
-                    _vm.nextUrl
-                      ? _c("div", { staticClass: "text-center mt-3" }, [
-                          _c(
-                            "button",
-                            {
-                              staticClass: "btn btn-outline-secondary",
-                              on: {
-                                click: function($event) {
-                                  $event.preventDefault()
-                                  return _vm.fetch(_vm.nextUrl)
-                                }
-                              }
-                            },
-                            [_vm._v("Load more answers")]
-                          )
-                        ])
-                      : _vm._e()
-                  ],
-                  2
-                )
-              ])
-            ])
-          ])
-        : _vm._e(),
-      _vm._v(" "),
-      _c("new-answer", {
-        attrs: { "question-id": _vm.question.id },
-        on: { created: _vm.add }
-      })
-    ],
-    1
-  )
-}
-var staticRenderFns = []
-render._withStripped = true
-module.exports = { render: render, staticRenderFns: staticRenderFns }
-if (false) {
-  module.hot.accept()
-  if (module.hot.data) {
-    require("vue-hot-reload-api")      .rerender("data-v-2fc0920e", module.exports)
-  }
-}
-
-/***/ }),
-/* 89 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var render = function() {
-  var _vm = this
-  var _h = _vm.$createElement
-  var _c = _vm._self._c || _h
-  return _c(
-    "div",
-    { staticClass: "container" },
-    [
-      _c("question", { attrs: { question: _vm.question } }),
-      _vm._v(" "),
-      _c("answers", { attrs: { question: _vm.question } })
-    ],
-    1
-  )
-}
-var staticRenderFns = []
-render._withStripped = true
-module.exports = { render: render, staticRenderFns: staticRenderFns }
-if (false) {
-  module.hot.accept()
-  if (module.hot.data) {
-    require("vue-hot-reload-api")      .rerender("data-v-e5750c5c", module.exports)
-  }
-}
-
-/***/ }),
-/* 90 */
-/***/ (function(module, exports) {
-
-// removed by extract-text-webpack-plugin
-
-/***/ }),
-/* 91 */,
-/* 92 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// Utilities
-//
-
-
-
-function _class(obj) { return Object.prototype.toString.call(obj); }
-
-function isString(obj) { return _class(obj) === '[object String]'; }
-
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
-
-function has(object, key) {
-  return _hasOwnProperty.call(object, key);
-}
-
-// Merge objects
-//
-function assign(obj /*from1, from2, from3, ...*/) {
-  var sources = Array.prototype.slice.call(arguments, 1);
-
-  sources.forEach(function (source) {
-    if (!source) { return; }
-
-    if (typeof source !== 'object') {
-      throw new TypeError(source + 'must be object');
-    }
-
-    Object.keys(source).forEach(function (key) {
-      obj[key] = source[key];
-    });
-  });
-
-  return obj;
-}
-
-// Remove element from array and put another array at those position.
-// Useful for some operations with tokens
-function arrayReplaceAt(src, pos, newElements) {
-  return [].concat(src.slice(0, pos), newElements, src.slice(pos + 1));
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-function isValidEntityCode(c) {
-  /*eslint no-bitwise:0*/
-  // broken sequence
-  if (c >= 0xD800 && c <= 0xDFFF) { return false; }
-  // never used
-  if (c >= 0xFDD0 && c <= 0xFDEF) { return false; }
-  if ((c & 0xFFFF) === 0xFFFF || (c & 0xFFFF) === 0xFFFE) { return false; }
-  // control codes
-  if (c >= 0x00 && c <= 0x08) { return false; }
-  if (c === 0x0B) { return false; }
-  if (c >= 0x0E && c <= 0x1F) { return false; }
-  if (c >= 0x7F && c <= 0x9F) { return false; }
-  // out of range
-  if (c > 0x10FFFF) { return false; }
-  return true;
-}
-
-function fromCodePoint(c) {
-  /*eslint no-bitwise:0*/
-  if (c > 0xffff) {
-    c -= 0x10000;
-    var surrogate1 = 0xd800 + (c >> 10),
-        surrogate2 = 0xdc00 + (c & 0x3ff);
-
-    return String.fromCharCode(surrogate1, surrogate2);
-  }
-  return String.fromCharCode(c);
-}
-
-
-var UNESCAPE_MD_RE  = /\\([!"#$%&'()*+,\-.\/:;<=>?@[\\\]^_`{|}~])/g;
-var ENTITY_RE       = /&([a-z#][a-z0-9]{1,31});/gi;
-var UNESCAPE_ALL_RE = new RegExp(UNESCAPE_MD_RE.source + '|' + ENTITY_RE.source, 'gi');
-
-var DIGITAL_ENTITY_TEST_RE = /^#((?:x[a-f0-9]{1,8}|[0-9]{1,8}))/i;
-
-var entities = __webpack_require__(96);
-
-function replaceEntityPattern(match, name) {
-  var code = 0;
-
-  if (has(entities, name)) {
-    return entities[name];
-  }
-
-  if (name.charCodeAt(0) === 0x23/* # */ && DIGITAL_ENTITY_TEST_RE.test(name)) {
-    code = name[1].toLowerCase() === 'x' ?
-      parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
-
-    if (isValidEntityCode(code)) {
-      return fromCodePoint(code);
-    }
-  }
-
-  return match;
-}
-
-/*function replaceEntities(str) {
-  if (str.indexOf('&') < 0) { return str; }
-
-  return str.replace(ENTITY_RE, replaceEntityPattern);
-}*/
-
-function unescapeMd(str) {
-  if (str.indexOf('\\') < 0) { return str; }
-  return str.replace(UNESCAPE_MD_RE, '$1');
-}
-
-function unescapeAll(str) {
-  if (str.indexOf('\\') < 0 && str.indexOf('&') < 0) { return str; }
-
-  return str.replace(UNESCAPE_ALL_RE, function (match, escaped, entity) {
-    if (escaped) { return escaped; }
-    return replaceEntityPattern(match, entity);
-  });
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-var HTML_ESCAPE_TEST_RE = /[&<>"]/;
-var HTML_ESCAPE_REPLACE_RE = /[&<>"]/g;
-var HTML_REPLACEMENTS = {
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;'
-};
-
-function replaceUnsafeChar(ch) {
-  return HTML_REPLACEMENTS[ch];
-}
-
-function escapeHtml(str) {
-  if (HTML_ESCAPE_TEST_RE.test(str)) {
-    return str.replace(HTML_ESCAPE_REPLACE_RE, replaceUnsafeChar);
-  }
-  return str;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-var REGEXP_ESCAPE_RE = /[.?*+^$[\]\\(){}|-]/g;
-
-function escapeRE(str) {
-  return str.replace(REGEXP_ESCAPE_RE, '\\$&');
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-function isSpace(code) {
-  switch (code) {
-    case 0x09:
-    case 0x20:
-      return true;
-  }
-  return false;
-}
-
-// Zs (unicode class) || [\t\f\v\r\n]
-function isWhiteSpace(code) {
-  if (code >= 0x2000 && code <= 0x200A) { return true; }
-  switch (code) {
-    case 0x09: // \t
-    case 0x0A: // \n
-    case 0x0B: // \v
-    case 0x0C: // \f
-    case 0x0D: // \r
-    case 0x20:
-    case 0xA0:
-    case 0x1680:
-    case 0x202F:
-    case 0x205F:
-    case 0x3000:
-      return true;
-  }
-  return false;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-/*eslint-disable max-len*/
-var UNICODE_PUNCT_RE = __webpack_require__(93);
-
-// Currently without astral characters support.
-function isPunctChar(ch) {
-  return UNICODE_PUNCT_RE.test(ch);
-}
-
-
-// Markdown ASCII punctuation characters.
-//
-// !, ", #, $, %, &, ', (, ), *, +, ,, -, ., /, :, ;, <, =, >, ?, @, [, \, ], ^, _, `, {, |, }, or ~
-// http://spec.commonmark.org/0.15/#ascii-punctuation-character
-//
-// Don't confuse with unicode punctuation !!! It lacks some chars in ascii range.
-//
-function isMdAsciiPunct(ch) {
-  switch (ch) {
-    case 0x21/* ! */:
-    case 0x22/* " */:
-    case 0x23/* # */:
-    case 0x24/* $ */:
-    case 0x25/* % */:
-    case 0x26/* & */:
-    case 0x27/* ' */:
-    case 0x28/* ( */:
-    case 0x29/* ) */:
-    case 0x2A/* * */:
-    case 0x2B/* + */:
-    case 0x2C/* , */:
-    case 0x2D/* - */:
-    case 0x2E/* . */:
-    case 0x2F/* / */:
-    case 0x3A/* : */:
-    case 0x3B/* ; */:
-    case 0x3C/* < */:
-    case 0x3D/* = */:
-    case 0x3E/* > */:
-    case 0x3F/* ? */:
-    case 0x40/* @ */:
-    case 0x5B/* [ */:
-    case 0x5C/* \ */:
-    case 0x5D/* ] */:
-    case 0x5E/* ^ */:
-    case 0x5F/* _ */:
-    case 0x60/* ` */:
-    case 0x7B/* { */:
-    case 0x7C/* | */:
-    case 0x7D/* } */:
-    case 0x7E/* ~ */:
-      return true;
-    default:
-      return false;
-  }
-}
-
-// Hepler to unify [reference labels].
-//
-function normalizeReference(str) {
-  // Trim and collapse whitespace
-  //
-  str = str.trim().replace(/\s+/g, ' ');
-
-  // In node v10 'ẞ'.toLowerCase() === 'Ṿ', which is presumed to be a bug
-  // fixed in v12 (couldn't find any details).
-  //
-  // So treat this one as a special case
-  // (remove this when node v10 is no longer supported).
-  //
-  if ('ẞ'.toLowerCase() === 'Ṿ') {
-    str = str.replace(/ẞ/g, 'ß');
-  }
-
-  // .toLowerCase().toUpperCase() should get rid of all differences
-  // between letter variants.
-  //
-  // Simple .toLowerCase() doesn't normalize 125 code points correctly,
-  // and .toUpperCase doesn't normalize 6 of them (list of exceptions:
-  // İ, ϴ, ẞ, Ω, K, Å - those are already uppercased, but have differently
-  // uppercased versions).
-  //
-  // Here's an example showing how it happens. Lets take greek letter omega:
-  // uppercase U+0398 (Θ), U+03f4 (ϴ) and lowercase U+03b8 (θ), U+03d1 (ϑ)
-  //
-  // Unicode entries:
-  // 0398;GREEK CAPITAL LETTER THETA;Lu;0;L;;;;;N;;;;03B8;
-  // 03B8;GREEK SMALL LETTER THETA;Ll;0;L;;;;;N;;;0398;;0398
-  // 03D1;GREEK THETA SYMBOL;Ll;0;L;<compat> 03B8;;;;N;GREEK SMALL LETTER SCRIPT THETA;;0398;;0398
-  // 03F4;GREEK CAPITAL THETA SYMBOL;Lu;0;L;<compat> 0398;;;;N;;;;03B8;
-  //
-  // Case-insensitive comparison should treat all of them as equivalent.
-  //
-  // But .toLowerCase() doesn't change ϑ (it's already lowercase),
-  // and .toUpperCase() doesn't change ϴ (already uppercase).
-  //
-  // Applying first lower then upper case normalizes any character:
-  // '\u0398\u03f4\u03b8\u03d1'.toLowerCase().toUpperCase() === '\u0398\u0398\u0398\u0398'
-  //
-  // Note: this is equivalent to unicode case folding; unicode normalization
-  // is a different step that is not required here.
-  //
-  // Final result should be uppercased, because it's later stored in an object
-  // (this avoid a conflict with Object.prototype members,
-  // most notably, `__proto__`)
-  //
-  return str.toLowerCase().toUpperCase();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-// Re-export libraries commonly used in both markdown-it and its plugins,
-// so plugins won't have to depend on them explicitly, which reduces their
-// bundled size (e.g. a browser build).
-//
-exports.lib                 = {};
-exports.lib.mdurl           = __webpack_require__(97);
-exports.lib.ucmicro         = __webpack_require__(111);
-
-exports.assign              = assign;
-exports.isString            = isString;
-exports.has                 = has;
-exports.unescapeMd          = unescapeMd;
-exports.unescapeAll         = unescapeAll;
-exports.isValidEntityCode   = isValidEntityCode;
-exports.fromCodePoint       = fromCodePoint;
-// exports.replaceEntities     = replaceEntities;
-exports.escapeHtml          = escapeHtml;
-exports.arrayReplaceAt      = arrayReplaceAt;
-exports.isSpace             = isSpace;
-exports.isWhiteSpace        = isWhiteSpace;
-exports.isMdAsciiPunct      = isMdAsciiPunct;
-exports.isPunctChar         = isPunctChar;
-exports.escapeRE            = escapeRE;
-exports.normalizeReference  = normalizeReference;
-
-
-/***/ }),
-/* 93 */
-/***/ (function(module, exports) {
-
-module.exports=/[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061E\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166D\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B5A-\u1B60\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4E\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDF55-\uDF59]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9]|\uD805[\uDC4B-\uDC4F\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDF3C-\uDF3E]|\uD806[\uDC3B\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8]|\uD809[\uDC70-\uDC74]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDE97-\uDE9A]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD83A[\uDD5E\uDD5F]/
-
-/***/ }),
-/* 94 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/**
- * class Ruler
- *
- * Helper class, used by [[MarkdownIt#core]], [[MarkdownIt#block]] and
- * [[MarkdownIt#inline]] to manage sequences of functions (rules):
- *
- * - keep rules in defined order
- * - assign the name to each rule
- * - enable/disable rules
- * - add/replace rules
- * - allow assign rules to additional named chains (in the same)
- * - cacheing lists of active rules
- *
- * You will not need use this class directly until write plugins. For simple
- * rules control use [[MarkdownIt.disable]], [[MarkdownIt.enable]] and
- * [[MarkdownIt.use]].
- **/
-
-
-
-/**
- * new Ruler()
- **/
-function Ruler() {
-  // List of added rules. Each element is:
-  //
-  // {
-  //   name: XXX,
-  //   enabled: Boolean,
-  //   fn: Function(),
-  //   alt: [ name2, name3 ]
-  // }
-  //
-  this.__rules__ = [];
-
-  // Cached rule chains.
-  //
-  // First level - chain name, '' for default.
-  // Second level - diginal anchor for fast filtering by charcodes.
-  //
-  this.__cache__ = null;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Helper methods, should not be used directly
-
-
-// Find rule index by name
-//
-Ruler.prototype.__find__ = function (name) {
-  for (var i = 0; i < this.__rules__.length; i++) {
-    if (this.__rules__[i].name === name) {
-      return i;
-    }
-  }
-  return -1;
-};
-
-
-// Build rules lookup cache
-//
-Ruler.prototype.__compile__ = function () {
-  var self = this;
-  var chains = [ '' ];
-
-  // collect unique names
-  self.__rules__.forEach(function (rule) {
-    if (!rule.enabled) { return; }
-
-    rule.alt.forEach(function (altName) {
-      if (chains.indexOf(altName) < 0) {
-        chains.push(altName);
-      }
-    });
-  });
-
-  self.__cache__ = {};
-
-  chains.forEach(function (chain) {
-    self.__cache__[chain] = [];
-    self.__rules__.forEach(function (rule) {
-      if (!rule.enabled) { return; }
-
-      if (chain && rule.alt.indexOf(chain) < 0) { return; }
-
-      self.__cache__[chain].push(rule.fn);
-    });
-  });
-};
-
-
-/**
- * Ruler.at(name, fn [, options])
- * - name (String): rule name to replace.
- * - fn (Function): new rule function.
- * - options (Object): new rule options (not mandatory).
- *
- * Replace rule by name with new function & options. Throws error if name not
- * found.
- *
- * ##### Options:
- *
- * - __alt__ - array with names of "alternate" chains.
- *
- * ##### Example
- *
- * Replace existing typographer replacement rule with new one:
- *
- * ```javascript
- * var md = require('markdown-it')();
- *
- * md.core.ruler.at('replacements', function replace(state) {
- *   //...
- * });
- * ```
- **/
-Ruler.prototype.at = function (name, fn, options) {
-  var index = this.__find__(name);
-  var opt = options || {};
-
-  if (index === -1) { throw new Error('Parser rule not found: ' + name); }
-
-  this.__rules__[index].fn = fn;
-  this.__rules__[index].alt = opt.alt || [];
-  this.__cache__ = null;
-};
-
-
-/**
- * Ruler.before(beforeName, ruleName, fn [, options])
- * - beforeName (String): new rule will be added before this one.
- * - ruleName (String): name of added rule.
- * - fn (Function): rule function.
- * - options (Object): rule options (not mandatory).
- *
- * Add new rule to chain before one with given name. See also
- * [[Ruler.after]], [[Ruler.push]].
- *
- * ##### Options:
- *
- * - __alt__ - array with names of "alternate" chains.
- *
- * ##### Example
- *
- * ```javascript
- * var md = require('markdown-it')();
- *
- * md.block.ruler.before('paragraph', 'my_rule', function replace(state) {
- *   //...
- * });
- * ```
- **/
-Ruler.prototype.before = function (beforeName, ruleName, fn, options) {
-  var index = this.__find__(beforeName);
-  var opt = options || {};
-
-  if (index === -1) { throw new Error('Parser rule not found: ' + beforeName); }
-
-  this.__rules__.splice(index, 0, {
-    name: ruleName,
-    enabled: true,
-    fn: fn,
-    alt: opt.alt || []
-  });
-
-  this.__cache__ = null;
-};
-
-
-/**
- * Ruler.after(afterName, ruleName, fn [, options])
- * - afterName (String): new rule will be added after this one.
- * - ruleName (String): name of added rule.
- * - fn (Function): rule function.
- * - options (Object): rule options (not mandatory).
- *
- * Add new rule to chain after one with given name. See also
- * [[Ruler.before]], [[Ruler.push]].
- *
- * ##### Options:
- *
- * - __alt__ - array with names of "alternate" chains.
- *
- * ##### Example
- *
- * ```javascript
- * var md = require('markdown-it')();
- *
- * md.inline.ruler.after('text', 'my_rule', function replace(state) {
- *   //...
- * });
- * ```
- **/
-Ruler.prototype.after = function (afterName, ruleName, fn, options) {
-  var index = this.__find__(afterName);
-  var opt = options || {};
-
-  if (index === -1) { throw new Error('Parser rule not found: ' + afterName); }
-
-  this.__rules__.splice(index + 1, 0, {
-    name: ruleName,
-    enabled: true,
-    fn: fn,
-    alt: opt.alt || []
-  });
-
-  this.__cache__ = null;
-};
-
-/**
- * Ruler.push(ruleName, fn [, options])
- * - ruleName (String): name of added rule.
- * - fn (Function): rule function.
- * - options (Object): rule options (not mandatory).
- *
- * Push new rule to the end of chain. See also
- * [[Ruler.before]], [[Ruler.after]].
- *
- * ##### Options:
- *
- * - __alt__ - array with names of "alternate" chains.
- *
- * ##### Example
- *
- * ```javascript
- * var md = require('markdown-it')();
- *
- * md.core.ruler.push('my_rule', function replace(state) {
- *   //...
- * });
- * ```
- **/
-Ruler.prototype.push = function (ruleName, fn, options) {
-  var opt = options || {};
-
-  this.__rules__.push({
-    name: ruleName,
-    enabled: true,
-    fn: fn,
-    alt: opt.alt || []
-  });
-
-  this.__cache__ = null;
-};
-
-
-/**
- * Ruler.enable(list [, ignoreInvalid]) -> Array
- * - list (String|Array): list of rule names to enable.
- * - ignoreInvalid (Boolean): set `true` to ignore errors when rule not found.
- *
- * Enable rules with given names. If any rule name not found - throw Error.
- * Errors can be disabled by second param.
- *
- * Returns list of found rule names (if no exception happened).
- *
- * See also [[Ruler.disable]], [[Ruler.enableOnly]].
- **/
-Ruler.prototype.enable = function (list, ignoreInvalid) {
-  if (!Array.isArray(list)) { list = [ list ]; }
-
-  var result = [];
-
-  // Search by name and enable
-  list.forEach(function (name) {
-    var idx = this.__find__(name);
-
-    if (idx < 0) {
-      if (ignoreInvalid) { return; }
-      throw new Error('Rules manager: invalid rule name ' + name);
-    }
-    this.__rules__[idx].enabled = true;
-    result.push(name);
-  }, this);
-
-  this.__cache__ = null;
-  return result;
-};
-
-
-/**
- * Ruler.enableOnly(list [, ignoreInvalid])
- * - list (String|Array): list of rule names to enable (whitelist).
- * - ignoreInvalid (Boolean): set `true` to ignore errors when rule not found.
- *
- * Enable rules with given names, and disable everything else. If any rule name
- * not found - throw Error. Errors can be disabled by second param.
- *
- * See also [[Ruler.disable]], [[Ruler.enable]].
- **/
-Ruler.prototype.enableOnly = function (list, ignoreInvalid) {
-  if (!Array.isArray(list)) { list = [ list ]; }
-
-  this.__rules__.forEach(function (rule) { rule.enabled = false; });
-
-  this.enable(list, ignoreInvalid);
-};
-
-
-/**
- * Ruler.disable(list [, ignoreInvalid]) -> Array
- * - list (String|Array): list of rule names to disable.
- * - ignoreInvalid (Boolean): set `true` to ignore errors when rule not found.
- *
- * Disable rules with given names. If any rule name not found - throw Error.
- * Errors can be disabled by second param.
- *
- * Returns list of found rule names (if no exception happened).
- *
- * See also [[Ruler.enable]], [[Ruler.enableOnly]].
- **/
-Ruler.prototype.disable = function (list, ignoreInvalid) {
-  if (!Array.isArray(list)) { list = [ list ]; }
-
-  var result = [];
-
-  // Search by name and disable
-  list.forEach(function (name) {
-    var idx = this.__find__(name);
-
-    if (idx < 0) {
-      if (ignoreInvalid) { return; }
-      throw new Error('Rules manager: invalid rule name ' + name);
-    }
-    this.__rules__[idx].enabled = false;
-    result.push(name);
-  }, this);
-
-  this.__cache__ = null;
-  return result;
-};
-
-
-/**
- * Ruler.getRules(chainName) -> Array
- *
- * Return array of active functions (rules) for given chain name. It analyzes
- * rules configuration, compiles caches if not exists and returns result.
- *
- * Default chain name is `''` (empty string). It can't be skipped. That's
- * done intentionally, to keep signature monomorphic for high speed.
- **/
-Ruler.prototype.getRules = function (chainName) {
-  if (this.__cache__ === null) {
-    this.__compile__();
-  }
-
-  // Chain can be empty, if rules disabled. But we still have to return Array.
-  return this.__cache__[chainName] || [];
-};
-
-module.exports = Ruler;
-
-
-/***/ }),
-/* 95 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// Token class
-
-
-
-
-/**
- * class Token
- **/
-
-/**
- * new Token(type, tag, nesting)
- *
- * Create new token and fill passed properties.
- **/
-function Token(type, tag, nesting) {
-  /**
-   * Token#type -> String
-   *
-   * Type of the token (string, e.g. "paragraph_open")
-   **/
-  this.type     = type;
-
-  /**
-   * Token#tag -> String
-   *
-   * html tag name, e.g. "p"
-   **/
-  this.tag      = tag;
-
-  /**
-   * Token#attrs -> Array
-   *
-   * Html attributes. Format: `[ [ name1, value1 ], [ name2, value2 ] ]`
-   **/
-  this.attrs    = null;
-
-  /**
-   * Token#map -> Array
-   *
-   * Source map info. Format: `[ line_begin, line_end ]`
-   **/
-  this.map      = null;
-
-  /**
-   * Token#nesting -> Number
-   *
-   * Level change (number in {-1, 0, 1} set), where:
-   *
-   * -  `1` means the tag is opening
-   * -  `0` means the tag is self-closing
-   * - `-1` means the tag is closing
-   **/
-  this.nesting  = nesting;
-
-  /**
-   * Token#level -> Number
-   *
-   * nesting level, the same as `state.level`
-   **/
-  this.level    = 0;
-
-  /**
-   * Token#children -> Array
-   *
-   * An array of child nodes (inline and img tokens)
-   **/
-  this.children = null;
-
-  /**
-   * Token#content -> String
-   *
-   * In a case of self-closing tag (code, html, fence, etc.),
-   * it has contents of this tag.
-   **/
-  this.content  = '';
-
-  /**
-   * Token#markup -> String
-   *
-   * '*' or '_' for emphasis, fence string for fence, etc.
-   **/
-  this.markup   = '';
-
-  /**
-   * Token#info -> String
-   *
-   * fence infostring
-   **/
-  this.info     = '';
-
-  /**
-   * Token#meta -> Object
-   *
-   * A place for plugins to store an arbitrary data
-   **/
-  this.meta     = null;
-
-  /**
-   * Token#block -> Boolean
-   *
-   * True for block-level tokens, false for inline tokens.
-   * Used in renderer to calculate line breaks
-   **/
-  this.block    = false;
-
-  /**
-   * Token#hidden -> Boolean
-   *
-   * If it's true, ignore this element when rendering. Used for tight lists
-   * to hide paragraphs.
-   **/
-  this.hidden   = false;
-}
-
-
-/**
- * Token.attrIndex(name) -> Number
- *
- * Search attribute index by name.
- **/
-Token.prototype.attrIndex = function attrIndex(name) {
-  var attrs, i, len;
-
-  if (!this.attrs) { return -1; }
-
-  attrs = this.attrs;
-
-  for (i = 0, len = attrs.length; i < len; i++) {
-    if (attrs[i][0] === name) { return i; }
-  }
-  return -1;
-};
-
-
-/**
- * Token.attrPush(attrData)
- *
- * Add `[ name, value ]` attribute to list. Init attrs if necessary
- **/
-Token.prototype.attrPush = function attrPush(attrData) {
-  if (this.attrs) {
-    this.attrs.push(attrData);
-  } else {
-    this.attrs = [ attrData ];
-  }
-};
-
-
-/**
- * Token.attrSet(name, value)
- *
- * Set `name` attribute to `value`. Override old value if exists.
- **/
-Token.prototype.attrSet = function attrSet(name, value) {
-  var idx = this.attrIndex(name),
-      attrData = [ name, value ];
-
-  if (idx < 0) {
-    this.attrPush(attrData);
-  } else {
-    this.attrs[idx] = attrData;
-  }
-};
-
-
-/**
- * Token.attrGet(name)
- *
- * Get the value of attribute `name`, or null if it does not exist.
- **/
-Token.prototype.attrGet = function attrGet(name) {
-  var idx = this.attrIndex(name), value = null;
-  if (idx >= 0) {
-    value = this.attrs[idx][1];
-  }
-  return value;
-};
-
-
-/**
- * Token.attrJoin(name, value)
- *
- * Join value to existing attribute via space. Or create new attribute if not
- * exists. Useful to operate with token classes.
- **/
-Token.prototype.attrJoin = function attrJoin(name, value) {
-  var idx = this.attrIndex(name);
-
-  if (idx < 0) {
-    this.attrPush([ name, value ]);
-  } else {
-    this.attrs[idx][1] = this.attrs[idx][1] + ' ' + value;
-  }
-};
-
-
-module.exports = Token;
-
-
-/***/ }),
-/* 96 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// HTML5 entities map: { name -> utf16string }
-//
-
-
-/*eslint quotes:0*/
-module.exports = __webpack_require__(106);
-
-
-/***/ }),
-/* 97 */
+/* 137 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
 
-module.exports.encode = __webpack_require__(107);
-module.exports.decode = __webpack_require__(108);
-module.exports.format = __webpack_require__(109);
-module.exports.parse  = __webpack_require__(110);
+module.exports = __webpack_require__(138);
 
 
 /***/ }),
-/* 98 */
-/***/ (function(module, exports) {
-
-module.exports=/[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/
-
-/***/ }),
-/* 99 */
-/***/ (function(module, exports) {
-
-module.exports=/[\0-\x1F\x7F-\x9F]/
-
-/***/ }),
-/* 100 */
-/***/ (function(module, exports) {
-
-module.exports=/[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/
-
-/***/ }),
-/* 101 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// Regexps to match html elements
-
-
-
-var attr_name     = '[a-zA-Z_:][a-zA-Z0-9:._-]*';
-
-var unquoted      = '[^"\'=<>`\\x00-\\x20]+';
-var single_quoted = "'[^']*'";
-var double_quoted = '"[^"]*"';
-
-var attr_value  = '(?:' + unquoted + '|' + single_quoted + '|' + double_quoted + ')';
-
-var attribute   = '(?:\\s+' + attr_name + '(?:\\s*=\\s*' + attr_value + ')?)';
-
-var open_tag    = '<[A-Za-z][A-Za-z0-9\\-]*' + attribute + '*\\s*\\/?>';
-
-var close_tag   = '<\\/[A-Za-z][A-Za-z0-9\\-]*\\s*>';
-var comment     = '<!---->|<!--(?:-?[^>-])(?:-?[^-])*-->';
-var processing  = '<[?].*?[?]>';
-var declaration = '<![A-Z]+\\s+[^>]*>';
-var cdata       = '<!\\[CDATA\\[[\\s\\S]*?\\]\\]>';
-
-var HTML_TAG_RE = new RegExp('^(?:' + open_tag + '|' + close_tag + '|' + comment +
-                        '|' + processing + '|' + declaration + '|' + cdata + ')');
-var HTML_OPEN_CLOSE_TAG_RE = new RegExp('^(?:' + open_tag + '|' + close_tag + ')');
-
-module.exports.HTML_TAG_RE = HTML_TAG_RE;
-module.exports.HTML_OPEN_CLOSE_TAG_RE = HTML_OPEN_CLOSE_TAG_RE;
-
-
-/***/ }),
-/* 102 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// ~~strike through~~
-//
-
-
-
-// Insert each marker as a separate text token, and add it to delimiter list
-//
-module.exports.tokenize = function strikethrough(state, silent) {
-  var i, scanned, token, len, ch,
-      start = state.pos,
-      marker = state.src.charCodeAt(start);
-
-  if (silent) { return false; }
-
-  if (marker !== 0x7E/* ~ */) { return false; }
-
-  scanned = state.scanDelims(state.pos, true);
-  len = scanned.length;
-  ch = String.fromCharCode(marker);
-
-  if (len < 2) { return false; }
-
-  if (len % 2) {
-    token         = state.push('text', '', 0);
-    token.content = ch;
-    len--;
-  }
-
-  for (i = 0; i < len; i += 2) {
-    token         = state.push('text', '', 0);
-    token.content = ch + ch;
-
-    state.delimiters.push({
-      marker: marker,
-      length: 0, // disable "rule of 3" length checks meant for emphasis
-      jump:   i,
-      token:  state.tokens.length - 1,
-      end:    -1,
-      open:   scanned.can_open,
-      close:  scanned.can_close
-    });
-  }
-
-  state.pos += scanned.length;
-
-  return true;
-};
-
-
-function postProcess(state, delimiters) {
-  var i, j,
-      startDelim,
-      endDelim,
-      token,
-      loneMarkers = [],
-      max = delimiters.length;
-
-  for (i = 0; i < max; i++) {
-    startDelim = delimiters[i];
-
-    if (startDelim.marker !== 0x7E/* ~ */) {
-      continue;
-    }
-
-    if (startDelim.end === -1) {
-      continue;
-    }
-
-    endDelim = delimiters[startDelim.end];
-
-    token         = state.tokens[startDelim.token];
-    token.type    = 's_open';
-    token.tag     = 's';
-    token.nesting = 1;
-    token.markup  = '~~';
-    token.content = '';
-
-    token         = state.tokens[endDelim.token];
-    token.type    = 's_close';
-    token.tag     = 's';
-    token.nesting = -1;
-    token.markup  = '~~';
-    token.content = '';
-
-    if (state.tokens[endDelim.token - 1].type === 'text' &&
-        state.tokens[endDelim.token - 1].content === '~') {
-
-      loneMarkers.push(endDelim.token - 1);
-    }
-  }
-
-  // If a marker sequence has an odd number of characters, it's splitted
-  // like this: `~~~~~` -> `~` + `~~` + `~~`, leaving one marker at the
-  // start of the sequence.
-  //
-  // So, we have to move all those markers after subsequent s_close tags.
-  //
-  while (loneMarkers.length) {
-    i = loneMarkers.pop();
-    j = i + 1;
-
-    while (j < state.tokens.length && state.tokens[j].type === 's_close') {
-      j++;
-    }
-
-    j--;
-
-    if (i !== j) {
-      token = state.tokens[j];
-      state.tokens[j] = state.tokens[i];
-      state.tokens[i] = token;
-    }
-  }
-}
-
-
-// Walk through delimiter list and replace text tokens with tags
-//
-module.exports.postProcess = function strikethrough(state) {
-  var curr,
-      tokens_meta = state.tokens_meta,
-      max = state.tokens_meta.length;
-
-  postProcess(state, state.delimiters);
-
-  for (curr = 0; curr < max; curr++) {
-    if (tokens_meta[curr] && tokens_meta[curr].delimiters) {
-      postProcess(state, tokens_meta[curr].delimiters);
-    }
-  }
-};
-
-
-/***/ }),
-/* 103 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// Process *this* and _that_
-//
-
-
-
-// Insert each marker as a separate text token, and add it to delimiter list
-//
-module.exports.tokenize = function emphasis(state, silent) {
-  var i, scanned, token,
-      start = state.pos,
-      marker = state.src.charCodeAt(start);
-
-  if (silent) { return false; }
-
-  if (marker !== 0x5F /* _ */ && marker !== 0x2A /* * */) { return false; }
-
-  scanned = state.scanDelims(state.pos, marker === 0x2A);
-
-  for (i = 0; i < scanned.length; i++) {
-    token         = state.push('text', '', 0);
-    token.content = String.fromCharCode(marker);
-
-    state.delimiters.push({
-      // Char code of the starting marker (number).
-      //
-      marker: marker,
-
-      // Total length of these series of delimiters.
-      //
-      length: scanned.length,
-
-      // An amount of characters before this one that's equivalent to
-      // current one. In plain English: if this delimiter does not open
-      // an emphasis, neither do previous `jump` characters.
-      //
-      // Used to skip sequences like "*****" in one step, for 1st asterisk
-      // value will be 0, for 2nd it's 1 and so on.
-      //
-      jump:   i,
-
-      // A position of the token this delimiter corresponds to.
-      //
-      token:  state.tokens.length - 1,
-
-      // If this delimiter is matched as a valid opener, `end` will be
-      // equal to its position, otherwise it's `-1`.
-      //
-      end:    -1,
-
-      // Boolean flags that determine if this delimiter could open or close
-      // an emphasis.
-      //
-      open:   scanned.can_open,
-      close:  scanned.can_close
-    });
-  }
-
-  state.pos += scanned.length;
-
-  return true;
-};
-
-
-function postProcess(state, delimiters) {
-  var i,
-      startDelim,
-      endDelim,
-      token,
-      ch,
-      isStrong,
-      max = delimiters.length;
-
-  for (i = max - 1; i >= 0; i--) {
-    startDelim = delimiters[i];
-
-    if (startDelim.marker !== 0x5F/* _ */ && startDelim.marker !== 0x2A/* * */) {
-      continue;
-    }
-
-    // Process only opening markers
-    if (startDelim.end === -1) {
-      continue;
-    }
-
-    endDelim = delimiters[startDelim.end];
-
-    // If the previous delimiter has the same marker and is adjacent to this one,
-    // merge those into one strong delimiter.
-    //
-    // `<em><em>whatever</em></em>` -> `<strong>whatever</strong>`
-    //
-    isStrong = i > 0 &&
-               delimiters[i - 1].end === startDelim.end + 1 &&
-               delimiters[i - 1].token === startDelim.token - 1 &&
-               delimiters[startDelim.end + 1].token === endDelim.token + 1 &&
-               delimiters[i - 1].marker === startDelim.marker;
-
-    ch = String.fromCharCode(startDelim.marker);
-
-    token         = state.tokens[startDelim.token];
-    token.type    = isStrong ? 'strong_open' : 'em_open';
-    token.tag     = isStrong ? 'strong' : 'em';
-    token.nesting = 1;
-    token.markup  = isStrong ? ch + ch : ch;
-    token.content = '';
-
-    token         = state.tokens[endDelim.token];
-    token.type    = isStrong ? 'strong_close' : 'em_close';
-    token.tag     = isStrong ? 'strong' : 'em';
-    token.nesting = -1;
-    token.markup  = isStrong ? ch + ch : ch;
-    token.content = '';
-
-    if (isStrong) {
-      state.tokens[delimiters[i - 1].token].content = '';
-      state.tokens[delimiters[startDelim.end + 1].token].content = '';
-      i--;
-    }
-  }
-}
-
-
-// Walk through delimiter list and replace text tokens with tags
-//
-module.exports.postProcess = function emphasis(state) {
-  var curr,
-      tokens_meta = state.tokens_meta,
-      max = state.tokens_meta.length;
-
-  postProcess(state, state.delimiters);
-
-  for (curr = 0; curr < max; curr++) {
-    if (tokens_meta[curr] && tokens_meta[curr].delimiters) {
-      postProcess(state, tokens_meta[curr].delimiters);
-    }
-  }
-};
-
-
-/***/ }),
-/* 104 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-
-module.exports = __webpack_require__(105);
-
-
-/***/ }),
-/* 105 */
+/* 138 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -55483,21 +59216,21 @@ module.exports = __webpack_require__(105);
 
 
 
-var utils        = __webpack_require__(92);
-var helpers      = __webpack_require__(113);
-var Renderer     = __webpack_require__(117);
-var ParserCore   = __webpack_require__(118);
-var ParserBlock  = __webpack_require__(126);
-var ParserInline = __webpack_require__(140);
-var LinkifyIt    = __webpack_require__(153);
-var mdurl        = __webpack_require__(97);
-var punycode     = __webpack_require__(155);
+var utils        = __webpack_require__(0);
+var helpers      = __webpack_require__(146);
+var Renderer     = __webpack_require__(150);
+var ParserCore   = __webpack_require__(151);
+var ParserBlock  = __webpack_require__(159);
+var ParserInline = __webpack_require__(173);
+var LinkifyIt    = __webpack_require__(186);
+var mdurl        = __webpack_require__(23);
+var punycode     = __webpack_require__(188);
 
 
 var config = {
-  'default': __webpack_require__(156),
-  zero: __webpack_require__(157),
-  commonmark: __webpack_require__(158)
+  'default': __webpack_require__(189),
+  zero: __webpack_require__(190),
+  commonmark: __webpack_require__(191)
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -56062,13 +59795,13 @@ module.exports = MarkdownIt;
 
 
 /***/ }),
-/* 106 */
+/* 139 */
 /***/ (function(module, exports) {
 
 module.exports = {"Aacute":"Á","aacute":"á","Abreve":"Ă","abreve":"ă","ac":"∾","acd":"∿","acE":"∾̳","Acirc":"Â","acirc":"â","acute":"´","Acy":"А","acy":"а","AElig":"Æ","aelig":"æ","af":"⁡","Afr":"𝔄","afr":"𝔞","Agrave":"À","agrave":"à","alefsym":"ℵ","aleph":"ℵ","Alpha":"Α","alpha":"α","Amacr":"Ā","amacr":"ā","amalg":"⨿","amp":"&","AMP":"&","andand":"⩕","And":"⩓","and":"∧","andd":"⩜","andslope":"⩘","andv":"⩚","ang":"∠","ange":"⦤","angle":"∠","angmsdaa":"⦨","angmsdab":"⦩","angmsdac":"⦪","angmsdad":"⦫","angmsdae":"⦬","angmsdaf":"⦭","angmsdag":"⦮","angmsdah":"⦯","angmsd":"∡","angrt":"∟","angrtvb":"⊾","angrtvbd":"⦝","angsph":"∢","angst":"Å","angzarr":"⍼","Aogon":"Ą","aogon":"ą","Aopf":"𝔸","aopf":"𝕒","apacir":"⩯","ap":"≈","apE":"⩰","ape":"≊","apid":"≋","apos":"'","ApplyFunction":"⁡","approx":"≈","approxeq":"≊","Aring":"Å","aring":"å","Ascr":"𝒜","ascr":"𝒶","Assign":"≔","ast":"*","asymp":"≈","asympeq":"≍","Atilde":"Ã","atilde":"ã","Auml":"Ä","auml":"ä","awconint":"∳","awint":"⨑","backcong":"≌","backepsilon":"϶","backprime":"‵","backsim":"∽","backsimeq":"⋍","Backslash":"∖","Barv":"⫧","barvee":"⊽","barwed":"⌅","Barwed":"⌆","barwedge":"⌅","bbrk":"⎵","bbrktbrk":"⎶","bcong":"≌","Bcy":"Б","bcy":"б","bdquo":"„","becaus":"∵","because":"∵","Because":"∵","bemptyv":"⦰","bepsi":"϶","bernou":"ℬ","Bernoullis":"ℬ","Beta":"Β","beta":"β","beth":"ℶ","between":"≬","Bfr":"𝔅","bfr":"𝔟","bigcap":"⋂","bigcirc":"◯","bigcup":"⋃","bigodot":"⨀","bigoplus":"⨁","bigotimes":"⨂","bigsqcup":"⨆","bigstar":"★","bigtriangledown":"▽","bigtriangleup":"△","biguplus":"⨄","bigvee":"⋁","bigwedge":"⋀","bkarow":"⤍","blacklozenge":"⧫","blacksquare":"▪","blacktriangle":"▴","blacktriangledown":"▾","blacktriangleleft":"◂","blacktriangleright":"▸","blank":"␣","blk12":"▒","blk14":"░","blk34":"▓","block":"█","bne":"=⃥","bnequiv":"≡⃥","bNot":"⫭","bnot":"⌐","Bopf":"𝔹","bopf":"𝕓","bot":"⊥","bottom":"⊥","bowtie":"⋈","boxbox":"⧉","boxdl":"┐","boxdL":"╕","boxDl":"╖","boxDL":"╗","boxdr":"┌","boxdR":"╒","boxDr":"╓","boxDR":"╔","boxh":"─","boxH":"═","boxhd":"┬","boxHd":"╤","boxhD":"╥","boxHD":"╦","boxhu":"┴","boxHu":"╧","boxhU":"╨","boxHU":"╩","boxminus":"⊟","boxplus":"⊞","boxtimes":"⊠","boxul":"┘","boxuL":"╛","boxUl":"╜","boxUL":"╝","boxur":"└","boxuR":"╘","boxUr":"╙","boxUR":"╚","boxv":"│","boxV":"║","boxvh":"┼","boxvH":"╪","boxVh":"╫","boxVH":"╬","boxvl":"┤","boxvL":"╡","boxVl":"╢","boxVL":"╣","boxvr":"├","boxvR":"╞","boxVr":"╟","boxVR":"╠","bprime":"‵","breve":"˘","Breve":"˘","brvbar":"¦","bscr":"𝒷","Bscr":"ℬ","bsemi":"⁏","bsim":"∽","bsime":"⋍","bsolb":"⧅","bsol":"\\","bsolhsub":"⟈","bull":"•","bullet":"•","bump":"≎","bumpE":"⪮","bumpe":"≏","Bumpeq":"≎","bumpeq":"≏","Cacute":"Ć","cacute":"ć","capand":"⩄","capbrcup":"⩉","capcap":"⩋","cap":"∩","Cap":"⋒","capcup":"⩇","capdot":"⩀","CapitalDifferentialD":"ⅅ","caps":"∩︀","caret":"⁁","caron":"ˇ","Cayleys":"ℭ","ccaps":"⩍","Ccaron":"Č","ccaron":"č","Ccedil":"Ç","ccedil":"ç","Ccirc":"Ĉ","ccirc":"ĉ","Cconint":"∰","ccups":"⩌","ccupssm":"⩐","Cdot":"Ċ","cdot":"ċ","cedil":"¸","Cedilla":"¸","cemptyv":"⦲","cent":"¢","centerdot":"·","CenterDot":"·","cfr":"𝔠","Cfr":"ℭ","CHcy":"Ч","chcy":"ч","check":"✓","checkmark":"✓","Chi":"Χ","chi":"χ","circ":"ˆ","circeq":"≗","circlearrowleft":"↺","circlearrowright":"↻","circledast":"⊛","circledcirc":"⊚","circleddash":"⊝","CircleDot":"⊙","circledR":"®","circledS":"Ⓢ","CircleMinus":"⊖","CirclePlus":"⊕","CircleTimes":"⊗","cir":"○","cirE":"⧃","cire":"≗","cirfnint":"⨐","cirmid":"⫯","cirscir":"⧂","ClockwiseContourIntegral":"∲","CloseCurlyDoubleQuote":"”","CloseCurlyQuote":"’","clubs":"♣","clubsuit":"♣","colon":":","Colon":"∷","Colone":"⩴","colone":"≔","coloneq":"≔","comma":",","commat":"@","comp":"∁","compfn":"∘","complement":"∁","complexes":"ℂ","cong":"≅","congdot":"⩭","Congruent":"≡","conint":"∮","Conint":"∯","ContourIntegral":"∮","copf":"𝕔","Copf":"ℂ","coprod":"∐","Coproduct":"∐","copy":"©","COPY":"©","copysr":"℗","CounterClockwiseContourIntegral":"∳","crarr":"↵","cross":"✗","Cross":"⨯","Cscr":"𝒞","cscr":"𝒸","csub":"⫏","csube":"⫑","csup":"⫐","csupe":"⫒","ctdot":"⋯","cudarrl":"⤸","cudarrr":"⤵","cuepr":"⋞","cuesc":"⋟","cularr":"↶","cularrp":"⤽","cupbrcap":"⩈","cupcap":"⩆","CupCap":"≍","cup":"∪","Cup":"⋓","cupcup":"⩊","cupdot":"⊍","cupor":"⩅","cups":"∪︀","curarr":"↷","curarrm":"⤼","curlyeqprec":"⋞","curlyeqsucc":"⋟","curlyvee":"⋎","curlywedge":"⋏","curren":"¤","curvearrowleft":"↶","curvearrowright":"↷","cuvee":"⋎","cuwed":"⋏","cwconint":"∲","cwint":"∱","cylcty":"⌭","dagger":"†","Dagger":"‡","daleth":"ℸ","darr":"↓","Darr":"↡","dArr":"⇓","dash":"‐","Dashv":"⫤","dashv":"⊣","dbkarow":"⤏","dblac":"˝","Dcaron":"Ď","dcaron":"ď","Dcy":"Д","dcy":"д","ddagger":"‡","ddarr":"⇊","DD":"ⅅ","dd":"ⅆ","DDotrahd":"⤑","ddotseq":"⩷","deg":"°","Del":"∇","Delta":"Δ","delta":"δ","demptyv":"⦱","dfisht":"⥿","Dfr":"𝔇","dfr":"𝔡","dHar":"⥥","dharl":"⇃","dharr":"⇂","DiacriticalAcute":"´","DiacriticalDot":"˙","DiacriticalDoubleAcute":"˝","DiacriticalGrave":"`","DiacriticalTilde":"˜","diam":"⋄","diamond":"⋄","Diamond":"⋄","diamondsuit":"♦","diams":"♦","die":"¨","DifferentialD":"ⅆ","digamma":"ϝ","disin":"⋲","div":"÷","divide":"÷","divideontimes":"⋇","divonx":"⋇","DJcy":"Ђ","djcy":"ђ","dlcorn":"⌞","dlcrop":"⌍","dollar":"$","Dopf":"𝔻","dopf":"𝕕","Dot":"¨","dot":"˙","DotDot":"⃜","doteq":"≐","doteqdot":"≑","DotEqual":"≐","dotminus":"∸","dotplus":"∔","dotsquare":"⊡","doublebarwedge":"⌆","DoubleContourIntegral":"∯","DoubleDot":"¨","DoubleDownArrow":"⇓","DoubleLeftArrow":"⇐","DoubleLeftRightArrow":"⇔","DoubleLeftTee":"⫤","DoubleLongLeftArrow":"⟸","DoubleLongLeftRightArrow":"⟺","DoubleLongRightArrow":"⟹","DoubleRightArrow":"⇒","DoubleRightTee":"⊨","DoubleUpArrow":"⇑","DoubleUpDownArrow":"⇕","DoubleVerticalBar":"∥","DownArrowBar":"⤓","downarrow":"↓","DownArrow":"↓","Downarrow":"⇓","DownArrowUpArrow":"⇵","DownBreve":"̑","downdownarrows":"⇊","downharpoonleft":"⇃","downharpoonright":"⇂","DownLeftRightVector":"⥐","DownLeftTeeVector":"⥞","DownLeftVectorBar":"⥖","DownLeftVector":"↽","DownRightTeeVector":"⥟","DownRightVectorBar":"⥗","DownRightVector":"⇁","DownTeeArrow":"↧","DownTee":"⊤","drbkarow":"⤐","drcorn":"⌟","drcrop":"⌌","Dscr":"𝒟","dscr":"𝒹","DScy":"Ѕ","dscy":"ѕ","dsol":"⧶","Dstrok":"Đ","dstrok":"đ","dtdot":"⋱","dtri":"▿","dtrif":"▾","duarr":"⇵","duhar":"⥯","dwangle":"⦦","DZcy":"Џ","dzcy":"џ","dzigrarr":"⟿","Eacute":"É","eacute":"é","easter":"⩮","Ecaron":"Ě","ecaron":"ě","Ecirc":"Ê","ecirc":"ê","ecir":"≖","ecolon":"≕","Ecy":"Э","ecy":"э","eDDot":"⩷","Edot":"Ė","edot":"ė","eDot":"≑","ee":"ⅇ","efDot":"≒","Efr":"𝔈","efr":"𝔢","eg":"⪚","Egrave":"È","egrave":"è","egs":"⪖","egsdot":"⪘","el":"⪙","Element":"∈","elinters":"⏧","ell":"ℓ","els":"⪕","elsdot":"⪗","Emacr":"Ē","emacr":"ē","empty":"∅","emptyset":"∅","EmptySmallSquare":"◻","emptyv":"∅","EmptyVerySmallSquare":"▫","emsp13":" ","emsp14":" ","emsp":" ","ENG":"Ŋ","eng":"ŋ","ensp":" ","Eogon":"Ę","eogon":"ę","Eopf":"𝔼","eopf":"𝕖","epar":"⋕","eparsl":"⧣","eplus":"⩱","epsi":"ε","Epsilon":"Ε","epsilon":"ε","epsiv":"ϵ","eqcirc":"≖","eqcolon":"≕","eqsim":"≂","eqslantgtr":"⪖","eqslantless":"⪕","Equal":"⩵","equals":"=","EqualTilde":"≂","equest":"≟","Equilibrium":"⇌","equiv":"≡","equivDD":"⩸","eqvparsl":"⧥","erarr":"⥱","erDot":"≓","escr":"ℯ","Escr":"ℰ","esdot":"≐","Esim":"⩳","esim":"≂","Eta":"Η","eta":"η","ETH":"Ð","eth":"ð","Euml":"Ë","euml":"ë","euro":"€","excl":"!","exist":"∃","Exists":"∃","expectation":"ℰ","exponentiale":"ⅇ","ExponentialE":"ⅇ","fallingdotseq":"≒","Fcy":"Ф","fcy":"ф","female":"♀","ffilig":"ﬃ","fflig":"ﬀ","ffllig":"ﬄ","Ffr":"𝔉","ffr":"𝔣","filig":"ﬁ","FilledSmallSquare":"◼","FilledVerySmallSquare":"▪","fjlig":"fj","flat":"♭","fllig":"ﬂ","fltns":"▱","fnof":"ƒ","Fopf":"𝔽","fopf":"𝕗","forall":"∀","ForAll":"∀","fork":"⋔","forkv":"⫙","Fouriertrf":"ℱ","fpartint":"⨍","frac12":"½","frac13":"⅓","frac14":"¼","frac15":"⅕","frac16":"⅙","frac18":"⅛","frac23":"⅔","frac25":"⅖","frac34":"¾","frac35":"⅗","frac38":"⅜","frac45":"⅘","frac56":"⅚","frac58":"⅝","frac78":"⅞","frasl":"⁄","frown":"⌢","fscr":"𝒻","Fscr":"ℱ","gacute":"ǵ","Gamma":"Γ","gamma":"γ","Gammad":"Ϝ","gammad":"ϝ","gap":"⪆","Gbreve":"Ğ","gbreve":"ğ","Gcedil":"Ģ","Gcirc":"Ĝ","gcirc":"ĝ","Gcy":"Г","gcy":"г","Gdot":"Ġ","gdot":"ġ","ge":"≥","gE":"≧","gEl":"⪌","gel":"⋛","geq":"≥","geqq":"≧","geqslant":"⩾","gescc":"⪩","ges":"⩾","gesdot":"⪀","gesdoto":"⪂","gesdotol":"⪄","gesl":"⋛︀","gesles":"⪔","Gfr":"𝔊","gfr":"𝔤","gg":"≫","Gg":"⋙","ggg":"⋙","gimel":"ℷ","GJcy":"Ѓ","gjcy":"ѓ","gla":"⪥","gl":"≷","glE":"⪒","glj":"⪤","gnap":"⪊","gnapprox":"⪊","gne":"⪈","gnE":"≩","gneq":"⪈","gneqq":"≩","gnsim":"⋧","Gopf":"𝔾","gopf":"𝕘","grave":"`","GreaterEqual":"≥","GreaterEqualLess":"⋛","GreaterFullEqual":"≧","GreaterGreater":"⪢","GreaterLess":"≷","GreaterSlantEqual":"⩾","GreaterTilde":"≳","Gscr":"𝒢","gscr":"ℊ","gsim":"≳","gsime":"⪎","gsiml":"⪐","gtcc":"⪧","gtcir":"⩺","gt":">","GT":">","Gt":"≫","gtdot":"⋗","gtlPar":"⦕","gtquest":"⩼","gtrapprox":"⪆","gtrarr":"⥸","gtrdot":"⋗","gtreqless":"⋛","gtreqqless":"⪌","gtrless":"≷","gtrsim":"≳","gvertneqq":"≩︀","gvnE":"≩︀","Hacek":"ˇ","hairsp":" ","half":"½","hamilt":"ℋ","HARDcy":"Ъ","hardcy":"ъ","harrcir":"⥈","harr":"↔","hArr":"⇔","harrw":"↭","Hat":"^","hbar":"ℏ","Hcirc":"Ĥ","hcirc":"ĥ","hearts":"♥","heartsuit":"♥","hellip":"…","hercon":"⊹","hfr":"𝔥","Hfr":"ℌ","HilbertSpace":"ℋ","hksearow":"⤥","hkswarow":"⤦","hoarr":"⇿","homtht":"∻","hookleftarrow":"↩","hookrightarrow":"↪","hopf":"𝕙","Hopf":"ℍ","horbar":"―","HorizontalLine":"─","hscr":"𝒽","Hscr":"ℋ","hslash":"ℏ","Hstrok":"Ħ","hstrok":"ħ","HumpDownHump":"≎","HumpEqual":"≏","hybull":"⁃","hyphen":"‐","Iacute":"Í","iacute":"í","ic":"⁣","Icirc":"Î","icirc":"î","Icy":"И","icy":"и","Idot":"İ","IEcy":"Е","iecy":"е","iexcl":"¡","iff":"⇔","ifr":"𝔦","Ifr":"ℑ","Igrave":"Ì","igrave":"ì","ii":"ⅈ","iiiint":"⨌","iiint":"∭","iinfin":"⧜","iiota":"℩","IJlig":"Ĳ","ijlig":"ĳ","Imacr":"Ī","imacr":"ī","image":"ℑ","ImaginaryI":"ⅈ","imagline":"ℐ","imagpart":"ℑ","imath":"ı","Im":"ℑ","imof":"⊷","imped":"Ƶ","Implies":"⇒","incare":"℅","in":"∈","infin":"∞","infintie":"⧝","inodot":"ı","intcal":"⊺","int":"∫","Int":"∬","integers":"ℤ","Integral":"∫","intercal":"⊺","Intersection":"⋂","intlarhk":"⨗","intprod":"⨼","InvisibleComma":"⁣","InvisibleTimes":"⁢","IOcy":"Ё","iocy":"ё","Iogon":"Į","iogon":"į","Iopf":"𝕀","iopf":"𝕚","Iota":"Ι","iota":"ι","iprod":"⨼","iquest":"¿","iscr":"𝒾","Iscr":"ℐ","isin":"∈","isindot":"⋵","isinE":"⋹","isins":"⋴","isinsv":"⋳","isinv":"∈","it":"⁢","Itilde":"Ĩ","itilde":"ĩ","Iukcy":"І","iukcy":"і","Iuml":"Ï","iuml":"ï","Jcirc":"Ĵ","jcirc":"ĵ","Jcy":"Й","jcy":"й","Jfr":"𝔍","jfr":"𝔧","jmath":"ȷ","Jopf":"𝕁","jopf":"𝕛","Jscr":"𝒥","jscr":"𝒿","Jsercy":"Ј","jsercy":"ј","Jukcy":"Є","jukcy":"є","Kappa":"Κ","kappa":"κ","kappav":"ϰ","Kcedil":"Ķ","kcedil":"ķ","Kcy":"К","kcy":"к","Kfr":"𝔎","kfr":"𝔨","kgreen":"ĸ","KHcy":"Х","khcy":"х","KJcy":"Ќ","kjcy":"ќ","Kopf":"𝕂","kopf":"𝕜","Kscr":"𝒦","kscr":"𝓀","lAarr":"⇚","Lacute":"Ĺ","lacute":"ĺ","laemptyv":"⦴","lagran":"ℒ","Lambda":"Λ","lambda":"λ","lang":"⟨","Lang":"⟪","langd":"⦑","langle":"⟨","lap":"⪅","Laplacetrf":"ℒ","laquo":"«","larrb":"⇤","larrbfs":"⤟","larr":"←","Larr":"↞","lArr":"⇐","larrfs":"⤝","larrhk":"↩","larrlp":"↫","larrpl":"⤹","larrsim":"⥳","larrtl":"↢","latail":"⤙","lAtail":"⤛","lat":"⪫","late":"⪭","lates":"⪭︀","lbarr":"⤌","lBarr":"⤎","lbbrk":"❲","lbrace":"{","lbrack":"[","lbrke":"⦋","lbrksld":"⦏","lbrkslu":"⦍","Lcaron":"Ľ","lcaron":"ľ","Lcedil":"Ļ","lcedil":"ļ","lceil":"⌈","lcub":"{","Lcy":"Л","lcy":"л","ldca":"⤶","ldquo":"“","ldquor":"„","ldrdhar":"⥧","ldrushar":"⥋","ldsh":"↲","le":"≤","lE":"≦","LeftAngleBracket":"⟨","LeftArrowBar":"⇤","leftarrow":"←","LeftArrow":"←","Leftarrow":"⇐","LeftArrowRightArrow":"⇆","leftarrowtail":"↢","LeftCeiling":"⌈","LeftDoubleBracket":"⟦","LeftDownTeeVector":"⥡","LeftDownVectorBar":"⥙","LeftDownVector":"⇃","LeftFloor":"⌊","leftharpoondown":"↽","leftharpoonup":"↼","leftleftarrows":"⇇","leftrightarrow":"↔","LeftRightArrow":"↔","Leftrightarrow":"⇔","leftrightarrows":"⇆","leftrightharpoons":"⇋","leftrightsquigarrow":"↭","LeftRightVector":"⥎","LeftTeeArrow":"↤","LeftTee":"⊣","LeftTeeVector":"⥚","leftthreetimes":"⋋","LeftTriangleBar":"⧏","LeftTriangle":"⊲","LeftTriangleEqual":"⊴","LeftUpDownVector":"⥑","LeftUpTeeVector":"⥠","LeftUpVectorBar":"⥘","LeftUpVector":"↿","LeftVectorBar":"⥒","LeftVector":"↼","lEg":"⪋","leg":"⋚","leq":"≤","leqq":"≦","leqslant":"⩽","lescc":"⪨","les":"⩽","lesdot":"⩿","lesdoto":"⪁","lesdotor":"⪃","lesg":"⋚︀","lesges":"⪓","lessapprox":"⪅","lessdot":"⋖","lesseqgtr":"⋚","lesseqqgtr":"⪋","LessEqualGreater":"⋚","LessFullEqual":"≦","LessGreater":"≶","lessgtr":"≶","LessLess":"⪡","lesssim":"≲","LessSlantEqual":"⩽","LessTilde":"≲","lfisht":"⥼","lfloor":"⌊","Lfr":"𝔏","lfr":"𝔩","lg":"≶","lgE":"⪑","lHar":"⥢","lhard":"↽","lharu":"↼","lharul":"⥪","lhblk":"▄","LJcy":"Љ","ljcy":"љ","llarr":"⇇","ll":"≪","Ll":"⋘","llcorner":"⌞","Lleftarrow":"⇚","llhard":"⥫","lltri":"◺","Lmidot":"Ŀ","lmidot":"ŀ","lmoustache":"⎰","lmoust":"⎰","lnap":"⪉","lnapprox":"⪉","lne":"⪇","lnE":"≨","lneq":"⪇","lneqq":"≨","lnsim":"⋦","loang":"⟬","loarr":"⇽","lobrk":"⟦","longleftarrow":"⟵","LongLeftArrow":"⟵","Longleftarrow":"⟸","longleftrightarrow":"⟷","LongLeftRightArrow":"⟷","Longleftrightarrow":"⟺","longmapsto":"⟼","longrightarrow":"⟶","LongRightArrow":"⟶","Longrightarrow":"⟹","looparrowleft":"↫","looparrowright":"↬","lopar":"⦅","Lopf":"𝕃","lopf":"𝕝","loplus":"⨭","lotimes":"⨴","lowast":"∗","lowbar":"_","LowerLeftArrow":"↙","LowerRightArrow":"↘","loz":"◊","lozenge":"◊","lozf":"⧫","lpar":"(","lparlt":"⦓","lrarr":"⇆","lrcorner":"⌟","lrhar":"⇋","lrhard":"⥭","lrm":"‎","lrtri":"⊿","lsaquo":"‹","lscr":"𝓁","Lscr":"ℒ","lsh":"↰","Lsh":"↰","lsim":"≲","lsime":"⪍","lsimg":"⪏","lsqb":"[","lsquo":"‘","lsquor":"‚","Lstrok":"Ł","lstrok":"ł","ltcc":"⪦","ltcir":"⩹","lt":"<","LT":"<","Lt":"≪","ltdot":"⋖","lthree":"⋋","ltimes":"⋉","ltlarr":"⥶","ltquest":"⩻","ltri":"◃","ltrie":"⊴","ltrif":"◂","ltrPar":"⦖","lurdshar":"⥊","luruhar":"⥦","lvertneqq":"≨︀","lvnE":"≨︀","macr":"¯","male":"♂","malt":"✠","maltese":"✠","Map":"⤅","map":"↦","mapsto":"↦","mapstodown":"↧","mapstoleft":"↤","mapstoup":"↥","marker":"▮","mcomma":"⨩","Mcy":"М","mcy":"м","mdash":"—","mDDot":"∺","measuredangle":"∡","MediumSpace":" ","Mellintrf":"ℳ","Mfr":"𝔐","mfr":"𝔪","mho":"℧","micro":"µ","midast":"*","midcir":"⫰","mid":"∣","middot":"·","minusb":"⊟","minus":"−","minusd":"∸","minusdu":"⨪","MinusPlus":"∓","mlcp":"⫛","mldr":"…","mnplus":"∓","models":"⊧","Mopf":"𝕄","mopf":"𝕞","mp":"∓","mscr":"𝓂","Mscr":"ℳ","mstpos":"∾","Mu":"Μ","mu":"μ","multimap":"⊸","mumap":"⊸","nabla":"∇","Nacute":"Ń","nacute":"ń","nang":"∠⃒","nap":"≉","napE":"⩰̸","napid":"≋̸","napos":"ŉ","napprox":"≉","natural":"♮","naturals":"ℕ","natur":"♮","nbsp":" ","nbump":"≎̸","nbumpe":"≏̸","ncap":"⩃","Ncaron":"Ň","ncaron":"ň","Ncedil":"Ņ","ncedil":"ņ","ncong":"≇","ncongdot":"⩭̸","ncup":"⩂","Ncy":"Н","ncy":"н","ndash":"–","nearhk":"⤤","nearr":"↗","neArr":"⇗","nearrow":"↗","ne":"≠","nedot":"≐̸","NegativeMediumSpace":"​","NegativeThickSpace":"​","NegativeThinSpace":"​","NegativeVeryThinSpace":"​","nequiv":"≢","nesear":"⤨","nesim":"≂̸","NestedGreaterGreater":"≫","NestedLessLess":"≪","NewLine":"\n","nexist":"∄","nexists":"∄","Nfr":"𝔑","nfr":"𝔫","ngE":"≧̸","nge":"≱","ngeq":"≱","ngeqq":"≧̸","ngeqslant":"⩾̸","nges":"⩾̸","nGg":"⋙̸","ngsim":"≵","nGt":"≫⃒","ngt":"≯","ngtr":"≯","nGtv":"≫̸","nharr":"↮","nhArr":"⇎","nhpar":"⫲","ni":"∋","nis":"⋼","nisd":"⋺","niv":"∋","NJcy":"Њ","njcy":"њ","nlarr":"↚","nlArr":"⇍","nldr":"‥","nlE":"≦̸","nle":"≰","nleftarrow":"↚","nLeftarrow":"⇍","nleftrightarrow":"↮","nLeftrightarrow":"⇎","nleq":"≰","nleqq":"≦̸","nleqslant":"⩽̸","nles":"⩽̸","nless":"≮","nLl":"⋘̸","nlsim":"≴","nLt":"≪⃒","nlt":"≮","nltri":"⋪","nltrie":"⋬","nLtv":"≪̸","nmid":"∤","NoBreak":"⁠","NonBreakingSpace":" ","nopf":"𝕟","Nopf":"ℕ","Not":"⫬","not":"¬","NotCongruent":"≢","NotCupCap":"≭","NotDoubleVerticalBar":"∦","NotElement":"∉","NotEqual":"≠","NotEqualTilde":"≂̸","NotExists":"∄","NotGreater":"≯","NotGreaterEqual":"≱","NotGreaterFullEqual":"≧̸","NotGreaterGreater":"≫̸","NotGreaterLess":"≹","NotGreaterSlantEqual":"⩾̸","NotGreaterTilde":"≵","NotHumpDownHump":"≎̸","NotHumpEqual":"≏̸","notin":"∉","notindot":"⋵̸","notinE":"⋹̸","notinva":"∉","notinvb":"⋷","notinvc":"⋶","NotLeftTriangleBar":"⧏̸","NotLeftTriangle":"⋪","NotLeftTriangleEqual":"⋬","NotLess":"≮","NotLessEqual":"≰","NotLessGreater":"≸","NotLessLess":"≪̸","NotLessSlantEqual":"⩽̸","NotLessTilde":"≴","NotNestedGreaterGreater":"⪢̸","NotNestedLessLess":"⪡̸","notni":"∌","notniva":"∌","notnivb":"⋾","notnivc":"⋽","NotPrecedes":"⊀","NotPrecedesEqual":"⪯̸","NotPrecedesSlantEqual":"⋠","NotReverseElement":"∌","NotRightTriangleBar":"⧐̸","NotRightTriangle":"⋫","NotRightTriangleEqual":"⋭","NotSquareSubset":"⊏̸","NotSquareSubsetEqual":"⋢","NotSquareSuperset":"⊐̸","NotSquareSupersetEqual":"⋣","NotSubset":"⊂⃒","NotSubsetEqual":"⊈","NotSucceeds":"⊁","NotSucceedsEqual":"⪰̸","NotSucceedsSlantEqual":"⋡","NotSucceedsTilde":"≿̸","NotSuperset":"⊃⃒","NotSupersetEqual":"⊉","NotTilde":"≁","NotTildeEqual":"≄","NotTildeFullEqual":"≇","NotTildeTilde":"≉","NotVerticalBar":"∤","nparallel":"∦","npar":"∦","nparsl":"⫽⃥","npart":"∂̸","npolint":"⨔","npr":"⊀","nprcue":"⋠","nprec":"⊀","npreceq":"⪯̸","npre":"⪯̸","nrarrc":"⤳̸","nrarr":"↛","nrArr":"⇏","nrarrw":"↝̸","nrightarrow":"↛","nRightarrow":"⇏","nrtri":"⋫","nrtrie":"⋭","nsc":"⊁","nsccue":"⋡","nsce":"⪰̸","Nscr":"𝒩","nscr":"𝓃","nshortmid":"∤","nshortparallel":"∦","nsim":"≁","nsime":"≄","nsimeq":"≄","nsmid":"∤","nspar":"∦","nsqsube":"⋢","nsqsupe":"⋣","nsub":"⊄","nsubE":"⫅̸","nsube":"⊈","nsubset":"⊂⃒","nsubseteq":"⊈","nsubseteqq":"⫅̸","nsucc":"⊁","nsucceq":"⪰̸","nsup":"⊅","nsupE":"⫆̸","nsupe":"⊉","nsupset":"⊃⃒","nsupseteq":"⊉","nsupseteqq":"⫆̸","ntgl":"≹","Ntilde":"Ñ","ntilde":"ñ","ntlg":"≸","ntriangleleft":"⋪","ntrianglelefteq":"⋬","ntriangleright":"⋫","ntrianglerighteq":"⋭","Nu":"Ν","nu":"ν","num":"#","numero":"№","numsp":" ","nvap":"≍⃒","nvdash":"⊬","nvDash":"⊭","nVdash":"⊮","nVDash":"⊯","nvge":"≥⃒","nvgt":">⃒","nvHarr":"⤄","nvinfin":"⧞","nvlArr":"⤂","nvle":"≤⃒","nvlt":"<⃒","nvltrie":"⊴⃒","nvrArr":"⤃","nvrtrie":"⊵⃒","nvsim":"∼⃒","nwarhk":"⤣","nwarr":"↖","nwArr":"⇖","nwarrow":"↖","nwnear":"⤧","Oacute":"Ó","oacute":"ó","oast":"⊛","Ocirc":"Ô","ocirc":"ô","ocir":"⊚","Ocy":"О","ocy":"о","odash":"⊝","Odblac":"Ő","odblac":"ő","odiv":"⨸","odot":"⊙","odsold":"⦼","OElig":"Œ","oelig":"œ","ofcir":"⦿","Ofr":"𝔒","ofr":"𝔬","ogon":"˛","Ograve":"Ò","ograve":"ò","ogt":"⧁","ohbar":"⦵","ohm":"Ω","oint":"∮","olarr":"↺","olcir":"⦾","olcross":"⦻","oline":"‾","olt":"⧀","Omacr":"Ō","omacr":"ō","Omega":"Ω","omega":"ω","Omicron":"Ο","omicron":"ο","omid":"⦶","ominus":"⊖","Oopf":"𝕆","oopf":"𝕠","opar":"⦷","OpenCurlyDoubleQuote":"“","OpenCurlyQuote":"‘","operp":"⦹","oplus":"⊕","orarr":"↻","Or":"⩔","or":"∨","ord":"⩝","order":"ℴ","orderof":"ℴ","ordf":"ª","ordm":"º","origof":"⊶","oror":"⩖","orslope":"⩗","orv":"⩛","oS":"Ⓢ","Oscr":"𝒪","oscr":"ℴ","Oslash":"Ø","oslash":"ø","osol":"⊘","Otilde":"Õ","otilde":"õ","otimesas":"⨶","Otimes":"⨷","otimes":"⊗","Ouml":"Ö","ouml":"ö","ovbar":"⌽","OverBar":"‾","OverBrace":"⏞","OverBracket":"⎴","OverParenthesis":"⏜","para":"¶","parallel":"∥","par":"∥","parsim":"⫳","parsl":"⫽","part":"∂","PartialD":"∂","Pcy":"П","pcy":"п","percnt":"%","period":".","permil":"‰","perp":"⊥","pertenk":"‱","Pfr":"𝔓","pfr":"𝔭","Phi":"Φ","phi":"φ","phiv":"ϕ","phmmat":"ℳ","phone":"☎","Pi":"Π","pi":"π","pitchfork":"⋔","piv":"ϖ","planck":"ℏ","planckh":"ℎ","plankv":"ℏ","plusacir":"⨣","plusb":"⊞","pluscir":"⨢","plus":"+","plusdo":"∔","plusdu":"⨥","pluse":"⩲","PlusMinus":"±","plusmn":"±","plussim":"⨦","plustwo":"⨧","pm":"±","Poincareplane":"ℌ","pointint":"⨕","popf":"𝕡","Popf":"ℙ","pound":"£","prap":"⪷","Pr":"⪻","pr":"≺","prcue":"≼","precapprox":"⪷","prec":"≺","preccurlyeq":"≼","Precedes":"≺","PrecedesEqual":"⪯","PrecedesSlantEqual":"≼","PrecedesTilde":"≾","preceq":"⪯","precnapprox":"⪹","precneqq":"⪵","precnsim":"⋨","pre":"⪯","prE":"⪳","precsim":"≾","prime":"′","Prime":"″","primes":"ℙ","prnap":"⪹","prnE":"⪵","prnsim":"⋨","prod":"∏","Product":"∏","profalar":"⌮","profline":"⌒","profsurf":"⌓","prop":"∝","Proportional":"∝","Proportion":"∷","propto":"∝","prsim":"≾","prurel":"⊰","Pscr":"𝒫","pscr":"𝓅","Psi":"Ψ","psi":"ψ","puncsp":" ","Qfr":"𝔔","qfr":"𝔮","qint":"⨌","qopf":"𝕢","Qopf":"ℚ","qprime":"⁗","Qscr":"𝒬","qscr":"𝓆","quaternions":"ℍ","quatint":"⨖","quest":"?","questeq":"≟","quot":"\"","QUOT":"\"","rAarr":"⇛","race":"∽̱","Racute":"Ŕ","racute":"ŕ","radic":"√","raemptyv":"⦳","rang":"⟩","Rang":"⟫","rangd":"⦒","range":"⦥","rangle":"⟩","raquo":"»","rarrap":"⥵","rarrb":"⇥","rarrbfs":"⤠","rarrc":"⤳","rarr":"→","Rarr":"↠","rArr":"⇒","rarrfs":"⤞","rarrhk":"↪","rarrlp":"↬","rarrpl":"⥅","rarrsim":"⥴","Rarrtl":"⤖","rarrtl":"↣","rarrw":"↝","ratail":"⤚","rAtail":"⤜","ratio":"∶","rationals":"ℚ","rbarr":"⤍","rBarr":"⤏","RBarr":"⤐","rbbrk":"❳","rbrace":"}","rbrack":"]","rbrke":"⦌","rbrksld":"⦎","rbrkslu":"⦐","Rcaron":"Ř","rcaron":"ř","Rcedil":"Ŗ","rcedil":"ŗ","rceil":"⌉","rcub":"}","Rcy":"Р","rcy":"р","rdca":"⤷","rdldhar":"⥩","rdquo":"”","rdquor":"”","rdsh":"↳","real":"ℜ","realine":"ℛ","realpart":"ℜ","reals":"ℝ","Re":"ℜ","rect":"▭","reg":"®","REG":"®","ReverseElement":"∋","ReverseEquilibrium":"⇋","ReverseUpEquilibrium":"⥯","rfisht":"⥽","rfloor":"⌋","rfr":"𝔯","Rfr":"ℜ","rHar":"⥤","rhard":"⇁","rharu":"⇀","rharul":"⥬","Rho":"Ρ","rho":"ρ","rhov":"ϱ","RightAngleBracket":"⟩","RightArrowBar":"⇥","rightarrow":"→","RightArrow":"→","Rightarrow":"⇒","RightArrowLeftArrow":"⇄","rightarrowtail":"↣","RightCeiling":"⌉","RightDoubleBracket":"⟧","RightDownTeeVector":"⥝","RightDownVectorBar":"⥕","RightDownVector":"⇂","RightFloor":"⌋","rightharpoondown":"⇁","rightharpoonup":"⇀","rightleftarrows":"⇄","rightleftharpoons":"⇌","rightrightarrows":"⇉","rightsquigarrow":"↝","RightTeeArrow":"↦","RightTee":"⊢","RightTeeVector":"⥛","rightthreetimes":"⋌","RightTriangleBar":"⧐","RightTriangle":"⊳","RightTriangleEqual":"⊵","RightUpDownVector":"⥏","RightUpTeeVector":"⥜","RightUpVectorBar":"⥔","RightUpVector":"↾","RightVectorBar":"⥓","RightVector":"⇀","ring":"˚","risingdotseq":"≓","rlarr":"⇄","rlhar":"⇌","rlm":"‏","rmoustache":"⎱","rmoust":"⎱","rnmid":"⫮","roang":"⟭","roarr":"⇾","robrk":"⟧","ropar":"⦆","ropf":"𝕣","Ropf":"ℝ","roplus":"⨮","rotimes":"⨵","RoundImplies":"⥰","rpar":")","rpargt":"⦔","rppolint":"⨒","rrarr":"⇉","Rrightarrow":"⇛","rsaquo":"›","rscr":"𝓇","Rscr":"ℛ","rsh":"↱","Rsh":"↱","rsqb":"]","rsquo":"’","rsquor":"’","rthree":"⋌","rtimes":"⋊","rtri":"▹","rtrie":"⊵","rtrif":"▸","rtriltri":"⧎","RuleDelayed":"⧴","ruluhar":"⥨","rx":"℞","Sacute":"Ś","sacute":"ś","sbquo":"‚","scap":"⪸","Scaron":"Š","scaron":"š","Sc":"⪼","sc":"≻","sccue":"≽","sce":"⪰","scE":"⪴","Scedil":"Ş","scedil":"ş","Scirc":"Ŝ","scirc":"ŝ","scnap":"⪺","scnE":"⪶","scnsim":"⋩","scpolint":"⨓","scsim":"≿","Scy":"С","scy":"с","sdotb":"⊡","sdot":"⋅","sdote":"⩦","searhk":"⤥","searr":"↘","seArr":"⇘","searrow":"↘","sect":"§","semi":";","seswar":"⤩","setminus":"∖","setmn":"∖","sext":"✶","Sfr":"𝔖","sfr":"𝔰","sfrown":"⌢","sharp":"♯","SHCHcy":"Щ","shchcy":"щ","SHcy":"Ш","shcy":"ш","ShortDownArrow":"↓","ShortLeftArrow":"←","shortmid":"∣","shortparallel":"∥","ShortRightArrow":"→","ShortUpArrow":"↑","shy":"­","Sigma":"Σ","sigma":"σ","sigmaf":"ς","sigmav":"ς","sim":"∼","simdot":"⩪","sime":"≃","simeq":"≃","simg":"⪞","simgE":"⪠","siml":"⪝","simlE":"⪟","simne":"≆","simplus":"⨤","simrarr":"⥲","slarr":"←","SmallCircle":"∘","smallsetminus":"∖","smashp":"⨳","smeparsl":"⧤","smid":"∣","smile":"⌣","smt":"⪪","smte":"⪬","smtes":"⪬︀","SOFTcy":"Ь","softcy":"ь","solbar":"⌿","solb":"⧄","sol":"/","Sopf":"𝕊","sopf":"𝕤","spades":"♠","spadesuit":"♠","spar":"∥","sqcap":"⊓","sqcaps":"⊓︀","sqcup":"⊔","sqcups":"⊔︀","Sqrt":"√","sqsub":"⊏","sqsube":"⊑","sqsubset":"⊏","sqsubseteq":"⊑","sqsup":"⊐","sqsupe":"⊒","sqsupset":"⊐","sqsupseteq":"⊒","square":"□","Square":"□","SquareIntersection":"⊓","SquareSubset":"⊏","SquareSubsetEqual":"⊑","SquareSuperset":"⊐","SquareSupersetEqual":"⊒","SquareUnion":"⊔","squarf":"▪","squ":"□","squf":"▪","srarr":"→","Sscr":"𝒮","sscr":"𝓈","ssetmn":"∖","ssmile":"⌣","sstarf":"⋆","Star":"⋆","star":"☆","starf":"★","straightepsilon":"ϵ","straightphi":"ϕ","strns":"¯","sub":"⊂","Sub":"⋐","subdot":"⪽","subE":"⫅","sube":"⊆","subedot":"⫃","submult":"⫁","subnE":"⫋","subne":"⊊","subplus":"⪿","subrarr":"⥹","subset":"⊂","Subset":"⋐","subseteq":"⊆","subseteqq":"⫅","SubsetEqual":"⊆","subsetneq":"⊊","subsetneqq":"⫋","subsim":"⫇","subsub":"⫕","subsup":"⫓","succapprox":"⪸","succ":"≻","succcurlyeq":"≽","Succeeds":"≻","SucceedsEqual":"⪰","SucceedsSlantEqual":"≽","SucceedsTilde":"≿","succeq":"⪰","succnapprox":"⪺","succneqq":"⪶","succnsim":"⋩","succsim":"≿","SuchThat":"∋","sum":"∑","Sum":"∑","sung":"♪","sup1":"¹","sup2":"²","sup3":"³","sup":"⊃","Sup":"⋑","supdot":"⪾","supdsub":"⫘","supE":"⫆","supe":"⊇","supedot":"⫄","Superset":"⊃","SupersetEqual":"⊇","suphsol":"⟉","suphsub":"⫗","suplarr":"⥻","supmult":"⫂","supnE":"⫌","supne":"⊋","supplus":"⫀","supset":"⊃","Supset":"⋑","supseteq":"⊇","supseteqq":"⫆","supsetneq":"⊋","supsetneqq":"⫌","supsim":"⫈","supsub":"⫔","supsup":"⫖","swarhk":"⤦","swarr":"↙","swArr":"⇙","swarrow":"↙","swnwar":"⤪","szlig":"ß","Tab":"\t","target":"⌖","Tau":"Τ","tau":"τ","tbrk":"⎴","Tcaron":"Ť","tcaron":"ť","Tcedil":"Ţ","tcedil":"ţ","Tcy":"Т","tcy":"т","tdot":"⃛","telrec":"⌕","Tfr":"𝔗","tfr":"𝔱","there4":"∴","therefore":"∴","Therefore":"∴","Theta":"Θ","theta":"θ","thetasym":"ϑ","thetav":"ϑ","thickapprox":"≈","thicksim":"∼","ThickSpace":"  ","ThinSpace":" ","thinsp":" ","thkap":"≈","thksim":"∼","THORN":"Þ","thorn":"þ","tilde":"˜","Tilde":"∼","TildeEqual":"≃","TildeFullEqual":"≅","TildeTilde":"≈","timesbar":"⨱","timesb":"⊠","times":"×","timesd":"⨰","tint":"∭","toea":"⤨","topbot":"⌶","topcir":"⫱","top":"⊤","Topf":"𝕋","topf":"𝕥","topfork":"⫚","tosa":"⤩","tprime":"‴","trade":"™","TRADE":"™","triangle":"▵","triangledown":"▿","triangleleft":"◃","trianglelefteq":"⊴","triangleq":"≜","triangleright":"▹","trianglerighteq":"⊵","tridot":"◬","trie":"≜","triminus":"⨺","TripleDot":"⃛","triplus":"⨹","trisb":"⧍","tritime":"⨻","trpezium":"⏢","Tscr":"𝒯","tscr":"𝓉","TScy":"Ц","tscy":"ц","TSHcy":"Ћ","tshcy":"ћ","Tstrok":"Ŧ","tstrok":"ŧ","twixt":"≬","twoheadleftarrow":"↞","twoheadrightarrow":"↠","Uacute":"Ú","uacute":"ú","uarr":"↑","Uarr":"↟","uArr":"⇑","Uarrocir":"⥉","Ubrcy":"Ў","ubrcy":"ў","Ubreve":"Ŭ","ubreve":"ŭ","Ucirc":"Û","ucirc":"û","Ucy":"У","ucy":"у","udarr":"⇅","Udblac":"Ű","udblac":"ű","udhar":"⥮","ufisht":"⥾","Ufr":"𝔘","ufr":"𝔲","Ugrave":"Ù","ugrave":"ù","uHar":"⥣","uharl":"↿","uharr":"↾","uhblk":"▀","ulcorn":"⌜","ulcorner":"⌜","ulcrop":"⌏","ultri":"◸","Umacr":"Ū","umacr":"ū","uml":"¨","UnderBar":"_","UnderBrace":"⏟","UnderBracket":"⎵","UnderParenthesis":"⏝","Union":"⋃","UnionPlus":"⊎","Uogon":"Ų","uogon":"ų","Uopf":"𝕌","uopf":"𝕦","UpArrowBar":"⤒","uparrow":"↑","UpArrow":"↑","Uparrow":"⇑","UpArrowDownArrow":"⇅","updownarrow":"↕","UpDownArrow":"↕","Updownarrow":"⇕","UpEquilibrium":"⥮","upharpoonleft":"↿","upharpoonright":"↾","uplus":"⊎","UpperLeftArrow":"↖","UpperRightArrow":"↗","upsi":"υ","Upsi":"ϒ","upsih":"ϒ","Upsilon":"Υ","upsilon":"υ","UpTeeArrow":"↥","UpTee":"⊥","upuparrows":"⇈","urcorn":"⌝","urcorner":"⌝","urcrop":"⌎","Uring":"Ů","uring":"ů","urtri":"◹","Uscr":"𝒰","uscr":"𝓊","utdot":"⋰","Utilde":"Ũ","utilde":"ũ","utri":"▵","utrif":"▴","uuarr":"⇈","Uuml":"Ü","uuml":"ü","uwangle":"⦧","vangrt":"⦜","varepsilon":"ϵ","varkappa":"ϰ","varnothing":"∅","varphi":"ϕ","varpi":"ϖ","varpropto":"∝","varr":"↕","vArr":"⇕","varrho":"ϱ","varsigma":"ς","varsubsetneq":"⊊︀","varsubsetneqq":"⫋︀","varsupsetneq":"⊋︀","varsupsetneqq":"⫌︀","vartheta":"ϑ","vartriangleleft":"⊲","vartriangleright":"⊳","vBar":"⫨","Vbar":"⫫","vBarv":"⫩","Vcy":"В","vcy":"в","vdash":"⊢","vDash":"⊨","Vdash":"⊩","VDash":"⊫","Vdashl":"⫦","veebar":"⊻","vee":"∨","Vee":"⋁","veeeq":"≚","vellip":"⋮","verbar":"|","Verbar":"‖","vert":"|","Vert":"‖","VerticalBar":"∣","VerticalLine":"|","VerticalSeparator":"❘","VerticalTilde":"≀","VeryThinSpace":" ","Vfr":"𝔙","vfr":"𝔳","vltri":"⊲","vnsub":"⊂⃒","vnsup":"⊃⃒","Vopf":"𝕍","vopf":"𝕧","vprop":"∝","vrtri":"⊳","Vscr":"𝒱","vscr":"𝓋","vsubnE":"⫋︀","vsubne":"⊊︀","vsupnE":"⫌︀","vsupne":"⊋︀","Vvdash":"⊪","vzigzag":"⦚","Wcirc":"Ŵ","wcirc":"ŵ","wedbar":"⩟","wedge":"∧","Wedge":"⋀","wedgeq":"≙","weierp":"℘","Wfr":"𝔚","wfr":"𝔴","Wopf":"𝕎","wopf":"𝕨","wp":"℘","wr":"≀","wreath":"≀","Wscr":"𝒲","wscr":"𝓌","xcap":"⋂","xcirc":"◯","xcup":"⋃","xdtri":"▽","Xfr":"𝔛","xfr":"𝔵","xharr":"⟷","xhArr":"⟺","Xi":"Ξ","xi":"ξ","xlarr":"⟵","xlArr":"⟸","xmap":"⟼","xnis":"⋻","xodot":"⨀","Xopf":"𝕏","xopf":"𝕩","xoplus":"⨁","xotime":"⨂","xrarr":"⟶","xrArr":"⟹","Xscr":"𝒳","xscr":"𝓍","xsqcup":"⨆","xuplus":"⨄","xutri":"△","xvee":"⋁","xwedge":"⋀","Yacute":"Ý","yacute":"ý","YAcy":"Я","yacy":"я","Ycirc":"Ŷ","ycirc":"ŷ","Ycy":"Ы","ycy":"ы","yen":"¥","Yfr":"𝔜","yfr":"𝔶","YIcy":"Ї","yicy":"ї","Yopf":"𝕐","yopf":"𝕪","Yscr":"𝒴","yscr":"𝓎","YUcy":"Ю","yucy":"ю","yuml":"ÿ","Yuml":"Ÿ","Zacute":"Ź","zacute":"ź","Zcaron":"Ž","zcaron":"ž","Zcy":"З","zcy":"з","Zdot":"Ż","zdot":"ż","zeetrf":"ℨ","ZeroWidthSpace":"​","Zeta":"Ζ","zeta":"ζ","zfr":"𝔷","Zfr":"ℨ","ZHcy":"Ж","zhcy":"ж","zigrarr":"⇝","zopf":"𝕫","Zopf":"ℤ","Zscr":"𝒵","zscr":"𝓏","zwj":"‍","zwnj":"‌"}
 
 /***/ }),
-/* 107 */
+/* 140 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56173,7 +59906,7 @@ module.exports = encode;
 
 
 /***/ }),
-/* 108 */
+/* 141 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56302,7 +60035,7 @@ module.exports = decode;
 
 
 /***/ }),
-/* 109 */
+/* 142 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56334,7 +60067,7 @@ module.exports = function format(url) {
 
 
 /***/ }),
-/* 110 */
+/* 143 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56653,27 +60386,27 @@ module.exports = urlParse;
 
 
 /***/ }),
-/* 111 */
+/* 144 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-exports.Any = __webpack_require__(98);
-exports.Cc  = __webpack_require__(99);
-exports.Cf  = __webpack_require__(112);
-exports.P   = __webpack_require__(93);
-exports.Z   = __webpack_require__(100);
+exports.Any = __webpack_require__(24);
+exports.Cc  = __webpack_require__(25);
+exports.Cf  = __webpack_require__(145);
+exports.P   = __webpack_require__(7);
+exports.Z   = __webpack_require__(26);
 
 
 /***/ }),
-/* 112 */
+/* 145 */
 /***/ (function(module, exports) {
 
 module.exports=/[\xAD\u0600-\u0605\u061C\u06DD\u070F\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/
 
 /***/ }),
-/* 113 */
+/* 146 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56681,13 +60414,13 @@ module.exports=/[\xAD\u0600-\u0605\u061C\u06DD\u070F\u08E2\u180E\u200B-\u200F\u2
 
 
 
-exports.parseLinkLabel       = __webpack_require__(114);
-exports.parseLinkDestination = __webpack_require__(115);
-exports.parseLinkTitle       = __webpack_require__(116);
+exports.parseLinkLabel       = __webpack_require__(147);
+exports.parseLinkDestination = __webpack_require__(148);
+exports.parseLinkTitle       = __webpack_require__(149);
 
 
 /***/ }),
-/* 114 */
+/* 147 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56742,7 +60475,7 @@ module.exports = function parseLinkLabel(state, start, disableNested) {
 
 
 /***/ }),
-/* 115 */
+/* 148 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56751,7 +60484,7 @@ module.exports = function parseLinkLabel(state, start, disableNested) {
 
 
 
-var unescapeAll = __webpack_require__(92).unescapeAll;
+var unescapeAll = __webpack_require__(0).unescapeAll;
 
 
 module.exports = function parseLinkDestination(str, pos, max) {
@@ -56828,7 +60561,7 @@ module.exports = function parseLinkDestination(str, pos, max) {
 
 
 /***/ }),
-/* 116 */
+/* 149 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56837,7 +60570,7 @@ module.exports = function parseLinkDestination(str, pos, max) {
 
 
 
-var unescapeAll = __webpack_require__(92).unescapeAll;
+var unescapeAll = __webpack_require__(0).unescapeAll;
 
 
 module.exports = function parseLinkTitle(str, pos, max) {
@@ -56888,7 +60621,7 @@ module.exports = function parseLinkTitle(str, pos, max) {
 
 
 /***/ }),
-/* 117 */
+/* 150 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -56902,9 +60635,9 @@ module.exports = function parseLinkTitle(str, pos, max) {
 
 
 
-var assign          = __webpack_require__(92).assign;
-var unescapeAll     = __webpack_require__(92).unescapeAll;
-var escapeHtml      = __webpack_require__(92).escapeHtml;
+var assign          = __webpack_require__(0).assign;
+var unescapeAll     = __webpack_require__(0).unescapeAll;
+var escapeHtml      = __webpack_require__(0).escapeHtml;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -57230,7 +60963,7 @@ module.exports = Renderer;
 
 
 /***/ }),
-/* 118 */
+/* 151 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57243,16 +60976,16 @@ module.exports = Renderer;
 
 
 
-var Ruler  = __webpack_require__(94);
+var Ruler  = __webpack_require__(8);
 
 
 var _rules = [
-  [ 'normalize',      __webpack_require__(119)      ],
-  [ 'block',          __webpack_require__(120)          ],
-  [ 'inline',         __webpack_require__(121)         ],
-  [ 'linkify',        __webpack_require__(122)        ],
-  [ 'replacements',   __webpack_require__(123)   ],
-  [ 'smartquotes',    __webpack_require__(124)    ]
+  [ 'normalize',      __webpack_require__(152)      ],
+  [ 'block',          __webpack_require__(153)          ],
+  [ 'inline',         __webpack_require__(154)         ],
+  [ 'linkify',        __webpack_require__(155)        ],
+  [ 'replacements',   __webpack_require__(156)   ],
+  [ 'smartquotes',    __webpack_require__(157)    ]
 ];
 
 
@@ -57288,14 +61021,14 @@ Core.prototype.process = function (state) {
   }
 };
 
-Core.prototype.State = __webpack_require__(125);
+Core.prototype.State = __webpack_require__(158);
 
 
 module.exports = Core;
 
 
 /***/ }),
-/* 119 */
+/* 152 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57323,7 +61056,7 @@ module.exports = function normalize(state) {
 
 
 /***/ }),
-/* 120 */
+/* 153 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57346,7 +61079,7 @@ module.exports = function block(state) {
 
 
 /***/ }),
-/* 121 */
+/* 154 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57366,7 +61099,7 @@ module.exports = function inline(state) {
 
 
 /***/ }),
-/* 122 */
+/* 155 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57377,7 +61110,7 @@ module.exports = function inline(state) {
 
 
 
-var arrayReplaceAt = __webpack_require__(92).arrayReplaceAt;
+var arrayReplaceAt = __webpack_require__(0).arrayReplaceAt;
 
 
 function isLinkOpen(str) {
@@ -57506,7 +61239,7 @@ module.exports = function linkify(state) {
 
 
 /***/ }),
-/* 123 */
+/* 156 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57620,7 +61353,7 @@ module.exports = function replace(state) {
 
 
 /***/ }),
-/* 124 */
+/* 157 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57629,9 +61362,9 @@ module.exports = function replace(state) {
 
 
 
-var isWhiteSpace   = __webpack_require__(92).isWhiteSpace;
-var isPunctChar    = __webpack_require__(92).isPunctChar;
-var isMdAsciiPunct = __webpack_require__(92).isMdAsciiPunct;
+var isWhiteSpace   = __webpack_require__(0).isWhiteSpace;
+var isPunctChar    = __webpack_require__(0).isPunctChar;
+var isMdAsciiPunct = __webpack_require__(0).isMdAsciiPunct;
 
 var QUOTE_TEST_RE = /['"]/;
 var QUOTE_RE = /['"]/g;
@@ -57828,7 +61561,7 @@ module.exports = function smartquotes(state) {
 
 
 /***/ }),
-/* 125 */
+/* 158 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57836,7 +61569,7 @@ module.exports = function smartquotes(state) {
 //
 
 
-var Token = __webpack_require__(95);
+var Token = __webpack_require__(9);
 
 
 function StateCore(src, md, env) {
@@ -57855,7 +61588,7 @@ module.exports = StateCore;
 
 
 /***/ }),
-/* 126 */
+/* 159 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57867,23 +61600,23 @@ module.exports = StateCore;
 
 
 
-var Ruler           = __webpack_require__(94);
+var Ruler           = __webpack_require__(8);
 
 
 var _rules = [
   // First 2 params - rule name & source. Secondary array - list of rules,
   // which can be terminated by this one.
-  [ 'table',      __webpack_require__(127),      [ 'paragraph', 'reference' ] ],
-  [ 'code',       __webpack_require__(128) ],
-  [ 'fence',      __webpack_require__(129),      [ 'paragraph', 'reference', 'blockquote', 'list' ] ],
-  [ 'blockquote', __webpack_require__(130), [ 'paragraph', 'reference', 'blockquote', 'list' ] ],
-  [ 'hr',         __webpack_require__(131),         [ 'paragraph', 'reference', 'blockquote', 'list' ] ],
-  [ 'list',       __webpack_require__(132),       [ 'paragraph', 'reference', 'blockquote' ] ],
-  [ 'reference',  __webpack_require__(133) ],
-  [ 'heading',    __webpack_require__(134),    [ 'paragraph', 'reference', 'blockquote' ] ],
-  [ 'lheading',   __webpack_require__(135) ],
-  [ 'html_block', __webpack_require__(136), [ 'paragraph', 'reference', 'blockquote' ] ],
-  [ 'paragraph',  __webpack_require__(138) ]
+  [ 'table',      __webpack_require__(160),      [ 'paragraph', 'reference' ] ],
+  [ 'code',       __webpack_require__(161) ],
+  [ 'fence',      __webpack_require__(162),      [ 'paragraph', 'reference', 'blockquote', 'list' ] ],
+  [ 'blockquote', __webpack_require__(163), [ 'paragraph', 'reference', 'blockquote', 'list' ] ],
+  [ 'hr',         __webpack_require__(164),         [ 'paragraph', 'reference', 'blockquote', 'list' ] ],
+  [ 'list',       __webpack_require__(165),       [ 'paragraph', 'reference', 'blockquote' ] ],
+  [ 'reference',  __webpack_require__(166) ],
+  [ 'heading',    __webpack_require__(167),    [ 'paragraph', 'reference', 'blockquote' ] ],
+  [ 'lheading',   __webpack_require__(168) ],
+  [ 'html_block', __webpack_require__(169), [ 'paragraph', 'reference', 'blockquote' ] ],
+  [ 'paragraph',  __webpack_require__(171) ]
 ];
 
 
@@ -57977,14 +61710,14 @@ ParserBlock.prototype.parse = function (src, md, env, outTokens) {
 };
 
 
-ParserBlock.prototype.State = __webpack_require__(139);
+ParserBlock.prototype.State = __webpack_require__(172);
 
 
 module.exports = ParserBlock;
 
 
 /***/ }),
-/* 127 */
+/* 160 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -57992,7 +61725,7 @@ module.exports = ParserBlock;
 
 
 
-var isSpace = __webpack_require__(92).isSpace;
+var isSpace = __webpack_require__(0).isSpace;
 
 
 function getLine(state, line) {
@@ -58187,7 +61920,7 @@ module.exports = function table(state, startLine, endLine, silent) {
 
 
 /***/ }),
-/* 128 */
+/* 161 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -58228,7 +61961,7 @@ module.exports = function code(state, startLine, endLine/*, silent*/) {
 
 
 /***/ }),
-/* 129 */
+/* 162 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -58333,7 +62066,7 @@ module.exports = function fence(state, startLine, endLine, silent) {
 
 
 /***/ }),
-/* 130 */
+/* 163 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -58341,7 +62074,7 @@ module.exports = function fence(state, startLine, endLine, silent) {
 
 
 
-var isSpace = __webpack_require__(92).isSpace;
+var isSpace = __webpack_require__(0).isSpace;
 
 
 module.exports = function blockquote(state, startLine, endLine, silent) {
@@ -58625,7 +62358,7 @@ module.exports = function blockquote(state, startLine, endLine, silent) {
 
 
 /***/ }),
-/* 131 */
+/* 164 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -58633,7 +62366,7 @@ module.exports = function blockquote(state, startLine, endLine, silent) {
 
 
 
-var isSpace = __webpack_require__(92).isSpace;
+var isSpace = __webpack_require__(0).isSpace;
 
 
 module.exports = function hr(state, startLine, endLine, silent) {
@@ -58677,7 +62410,7 @@ module.exports = function hr(state, startLine, endLine, silent) {
 
 
 /***/ }),
-/* 132 */
+/* 165 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -58685,7 +62418,7 @@ module.exports = function hr(state, startLine, endLine, silent) {
 
 
 
-var isSpace = __webpack_require__(92).isSpace;
+var isSpace = __webpack_require__(0).isSpace;
 
 
 // Search `[-+*][\n ]`, returns next pos after marker on success
@@ -59044,15 +62777,15 @@ module.exports = function list(state, startLine, endLine, silent) {
 
 
 /***/ }),
-/* 133 */
+/* 166 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
 
-var normalizeReference   = __webpack_require__(92).normalizeReference;
-var isSpace              = __webpack_require__(92).isSpace;
+var normalizeReference   = __webpack_require__(0).normalizeReference;
+var isSpace              = __webpack_require__(0).isSpace;
 
 
 module.exports = function reference(state, startLine, _endLine, silent) {
@@ -59249,7 +62982,7 @@ module.exports = function reference(state, startLine, _endLine, silent) {
 
 
 /***/ }),
-/* 134 */
+/* 167 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -59257,7 +62990,7 @@ module.exports = function reference(state, startLine, _endLine, silent) {
 
 
 
-var isSpace = __webpack_require__(92).isSpace;
+var isSpace = __webpack_require__(0).isSpace;
 
 
 module.exports = function heading(state, startLine, endLine, silent) {
@@ -59311,7 +63044,7 @@ module.exports = function heading(state, startLine, endLine, silent) {
 
 
 /***/ }),
-/* 135 */
+/* 168 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -59401,7 +63134,7 @@ module.exports = function lheading(state, startLine, endLine/*, silent*/) {
 
 
 /***/ }),
-/* 136 */
+/* 169 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -59410,8 +63143,8 @@ module.exports = function lheading(state, startLine, endLine/*, silent*/) {
 
 
 
-var block_names = __webpack_require__(137);
-var HTML_OPEN_CLOSE_TAG_RE = __webpack_require__(101).HTML_OPEN_CLOSE_TAG_RE;
+var block_names = __webpack_require__(170);
+var HTML_OPEN_CLOSE_TAG_RE = __webpack_require__(27).HTML_OPEN_CLOSE_TAG_RE;
 
 // An array of opening and corresponding closing sequences for html tags,
 // last argument defines whether it can terminate a paragraph or not
@@ -59482,7 +63215,7 @@ module.exports = function html_block(state, startLine, endLine, silent) {
 
 
 /***/ }),
-/* 137 */
+/* 170 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -59560,7 +63293,7 @@ module.exports = [
 
 
 /***/ }),
-/* 138 */
+/* 171 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -59619,7 +63352,7 @@ module.exports = function paragraph(state, startLine/*, endLine*/) {
 
 
 /***/ }),
-/* 139 */
+/* 172 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -59627,8 +63360,8 @@ module.exports = function paragraph(state, startLine/*, endLine*/) {
 
 
 
-var Token = __webpack_require__(95);
-var isSpace = __webpack_require__(92).isSpace;
+var Token = __webpack_require__(9);
+var isSpace = __webpack_require__(0).isSpace;
 
 
 function StateBlock(src, md, env, tokens) {
@@ -59857,7 +63590,7 @@ module.exports = StateBlock;
 
 
 /***/ }),
-/* 140 */
+/* 173 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -59869,31 +63602,31 @@ module.exports = StateBlock;
 
 
 
-var Ruler           = __webpack_require__(94);
+var Ruler           = __webpack_require__(8);
 
 
 ////////////////////////////////////////////////////////////////////////////////
 // Parser rules
 
 var _rules = [
-  [ 'text',            __webpack_require__(141) ],
-  [ 'newline',         __webpack_require__(142) ],
-  [ 'escape',          __webpack_require__(143) ],
-  [ 'backticks',       __webpack_require__(144) ],
-  [ 'strikethrough',   __webpack_require__(102).tokenize ],
-  [ 'emphasis',        __webpack_require__(103).tokenize ],
-  [ 'link',            __webpack_require__(145) ],
-  [ 'image',           __webpack_require__(146) ],
-  [ 'autolink',        __webpack_require__(147) ],
-  [ 'html_inline',     __webpack_require__(148) ],
-  [ 'entity',          __webpack_require__(149) ]
+  [ 'text',            __webpack_require__(174) ],
+  [ 'newline',         __webpack_require__(175) ],
+  [ 'escape',          __webpack_require__(176) ],
+  [ 'backticks',       __webpack_require__(177) ],
+  [ 'strikethrough',   __webpack_require__(28).tokenize ],
+  [ 'emphasis',        __webpack_require__(29).tokenize ],
+  [ 'link',            __webpack_require__(178) ],
+  [ 'image',           __webpack_require__(179) ],
+  [ 'autolink',        __webpack_require__(180) ],
+  [ 'html_inline',     __webpack_require__(181) ],
+  [ 'entity',          __webpack_require__(182) ]
 ];
 
 var _rules2 = [
-  [ 'balance_pairs',   __webpack_require__(150) ],
-  [ 'strikethrough',   __webpack_require__(102).postProcess ],
-  [ 'emphasis',        __webpack_require__(103).postProcess ],
-  [ 'text_collapse',   __webpack_require__(151) ]
+  [ 'balance_pairs',   __webpack_require__(183) ],
+  [ 'strikethrough',   __webpack_require__(28).postProcess ],
+  [ 'emphasis',        __webpack_require__(29).postProcess ],
+  [ 'text_collapse',   __webpack_require__(184) ]
 ];
 
 
@@ -60034,14 +63767,14 @@ ParserInline.prototype.parse = function (str, md, env, outTokens) {
 };
 
 
-ParserInline.prototype.State = __webpack_require__(152);
+ParserInline.prototype.State = __webpack_require__(185);
 
 
 module.exports = ParserInline;
 
 
 /***/ }),
-/* 141 */
+/* 174 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60137,7 +63870,7 @@ module.exports = function text(state, silent) {
 
 
 /***/ }),
-/* 142 */
+/* 175 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60145,7 +63878,7 @@ module.exports = function text(state, silent) {
 
 
 
-var isSpace = __webpack_require__(92).isSpace;
+var isSpace = __webpack_require__(0).isSpace;
 
 
 module.exports = function newline(state, silent) {
@@ -60186,7 +63919,7 @@ module.exports = function newline(state, silent) {
 
 
 /***/ }),
-/* 143 */
+/* 176 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60194,7 +63927,7 @@ module.exports = function newline(state, silent) {
 
 
 
-var isSpace = __webpack_require__(92).isSpace;
+var isSpace = __webpack_require__(0).isSpace;
 
 var ESCAPED = [];
 
@@ -60245,7 +63978,7 @@ module.exports = function escape(state, silent) {
 
 
 /***/ }),
-/* 144 */
+/* 177 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60295,7 +64028,7 @@ module.exports = function backtick(state, silent) {
 
 
 /***/ }),
-/* 145 */
+/* 178 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60303,8 +64036,8 @@ module.exports = function backtick(state, silent) {
 
 
 
-var normalizeReference   = __webpack_require__(92).normalizeReference;
-var isSpace              = __webpack_require__(92).isSpace;
+var normalizeReference   = __webpack_require__(0).normalizeReference;
+var isSpace              = __webpack_require__(0).isSpace;
 
 
 module.exports = function link(state, silent) {
@@ -60452,7 +64185,7 @@ module.exports = function link(state, silent) {
 
 
 /***/ }),
-/* 146 */
+/* 179 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60460,8 +64193,8 @@ module.exports = function link(state, silent) {
 
 
 
-var normalizeReference   = __webpack_require__(92).normalizeReference;
-var isSpace              = __webpack_require__(92).isSpace;
+var normalizeReference   = __webpack_require__(0).normalizeReference;
+var isSpace              = __webpack_require__(0).isSpace;
 
 
 module.exports = function image(state, silent) {
@@ -60611,7 +64344,7 @@ module.exports = function image(state, silent) {
 
 
 /***/ }),
-/* 147 */
+/* 180 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60690,7 +64423,7 @@ module.exports = function autolink(state, silent) {
 
 
 /***/ }),
-/* 148 */
+/* 181 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60699,7 +64432,7 @@ module.exports = function autolink(state, silent) {
 
 
 
-var HTML_TAG_RE = __webpack_require__(101).HTML_TAG_RE;
+var HTML_TAG_RE = __webpack_require__(27).HTML_TAG_RE;
 
 
 function isLetter(ch) {
@@ -60744,7 +64477,7 @@ module.exports = function html_inline(state, silent) {
 
 
 /***/ }),
-/* 149 */
+/* 182 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60752,10 +64485,10 @@ module.exports = function html_inline(state, silent) {
 
 
 
-var entities          = __webpack_require__(96);
-var has               = __webpack_require__(92).has;
-var isValidEntityCode = __webpack_require__(92).isValidEntityCode;
-var fromCodePoint     = __webpack_require__(92).fromCodePoint;
+var entities          = __webpack_require__(22);
+var has               = __webpack_require__(0).has;
+var isValidEntityCode = __webpack_require__(0).isValidEntityCode;
+var fromCodePoint     = __webpack_require__(0).fromCodePoint;
 
 
 var DIGITAL_RE = /^&#((?:x[a-f0-9]{1,6}|[0-9]{1,7}));/i;
@@ -60799,7 +64532,7 @@ module.exports = function entity(state, silent) {
 
 
 /***/ }),
-/* 150 */
+/* 183 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60914,7 +64647,7 @@ module.exports = function link_pairs(state) {
 
 
 /***/ }),
-/* 151 */
+/* 184 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60962,7 +64695,7 @@ module.exports = function text_collapse(state) {
 
 
 /***/ }),
-/* 152 */
+/* 185 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -60971,10 +64704,10 @@ module.exports = function text_collapse(state) {
 
 
 
-var Token          = __webpack_require__(95);
-var isWhiteSpace   = __webpack_require__(92).isWhiteSpace;
-var isPunctChar    = __webpack_require__(92).isPunctChar;
-var isMdAsciiPunct = __webpack_require__(92).isMdAsciiPunct;
+var Token          = __webpack_require__(9);
+var isWhiteSpace   = __webpack_require__(0).isWhiteSpace;
+var isPunctChar    = __webpack_require__(0).isPunctChar;
+var isMdAsciiPunct = __webpack_require__(0).isMdAsciiPunct;
 
 
 function StateInline(src, md, env, outTokens) {
@@ -61119,7 +64852,7 @@ module.exports = StateInline;
 
 
 /***/ }),
-/* 153 */
+/* 186 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -61275,7 +65008,7 @@ function createNormalizer() {
 function compile(self) {
 
   // Load & clone RE patterns.
-  var re = self.re = __webpack_require__(154)(self.__opts__);
+  var re = self.re = __webpack_require__(187)(self.__opts__);
 
   // Define dynamic patterns
   var tlds = self.__tlds__.slice();
@@ -61762,7 +65495,7 @@ module.exports = LinkifyIt;
 
 
 /***/ }),
-/* 154 */
+/* 187 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -61773,10 +65506,10 @@ module.exports = function (opts) {
   var re = {};
 
   // Use direct extract instead of `regenerate` to reduse browserified size
-  re.src_Any = __webpack_require__(98).source;
-  re.src_Cc  = __webpack_require__(99).source;
-  re.src_Z   = __webpack_require__(100).source;
-  re.src_P   = __webpack_require__(93).source;
+  re.src_Any = __webpack_require__(24).source;
+  re.src_Cc  = __webpack_require__(25).source;
+  re.src_Z   = __webpack_require__(26).source;
+  re.src_P   = __webpack_require__(7).source;
 
   // \p{\Z\P\Cc\CF} (white spaces + control + format + punctuation)
   re.src_ZPCc = [ re.src_Z, re.src_P, re.src_Cc ].join('|');
@@ -61949,7 +65682,7 @@ module.exports = function (opts) {
 
 
 /***/ }),
-/* 155 */
+/* 188 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(module, global) {var __WEBPACK_AMD_DEFINE_RESULT__;/*! https://mths.be/punycode v1.4.1 by @mathias */
@@ -62485,10 +66218,10 @@ module.exports = function (opts) {
 
 }(this));
 
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(21)(module), __webpack_require__(2)))
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(10)(module), __webpack_require__(1)))
 
 /***/ }),
-/* 156 */
+/* 189 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -62536,7 +66269,7 @@ module.exports = {
 
 
 /***/ }),
-/* 157 */
+/* 190 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -62605,7 +66338,7 @@ module.exports = {
 
 
 /***/ }),
-/* 158 */
+/* 191 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -62692,7 +66425,1911 @@ module.exports = {
 
 
 /***/ }),
-/* 159 */
+/* 192 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = markdownItPrism;
+
+var _prismjs = _interopRequireDefault(__webpack_require__(193));
+
+var _components = _interopRequireDefault(__webpack_require__(194));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function _slicedToArray(arr, i) { return _arrayWithHoles(arr) || _iterableToArrayLimit(arr, i) || _nonIterableRest(); }
+
+function _nonIterableRest() { throw new TypeError("Invalid attempt to destructure non-iterable instance"); }
+
+function _iterableToArrayLimit(arr, i) { if (!(Symbol.iterator in Object(arr) || Object.prototype.toString.call(arr) === "[object Arguments]")) { return; } var _arr = []; var _n = true; var _d = false; var _e = undefined; try { for (var _i = arr[Symbol.iterator](), _s; !(_n = (_s = _i.next()).done); _n = true) { _arr.push(_s.value); if (i && _arr.length === i) break; } } catch (err) { _d = true; _e = err; } finally { try { if (!_n && _i["return"] != null) _i["return"](); } finally { if (_d) throw _e; } } return _arr; }
+
+function _arrayWithHoles(arr) { if (Array.isArray(arr)) return arr; }
+
+/**
+ * A callback that can be used to perform custom initialisation of the Prism instance.
+ *
+ * @callback PrismInitialisationCallback
+ * @param {Prism} prism
+ *        The Prism instance
+ */
+
+/**
+ * The options for the markdown-it-prism plugin
+ *
+ * @typedef {Object} MarkdownItPrismOptions
+ * @property {String[]} plugins
+ *        Names of Prism plugins to load
+ * @property {PrismInitialisationCallback} init
+ *        Callback for Prism initialisation
+ * @property {String} defaultLanguageForUnknown
+ *        The language to use for code blocks that specify a language that Prism does not know
+ * @property {String} defaultLanguageForUnspecified
+ *        The language to use for code block that do not specify a language
+ * @property {String} defaultLanguage
+ *        Shorthand to set both {@code defaultLanguageForUnknown} and {@code defaultLanguageForUnspecified} to the same value
+ */
+const DEFAULTS = {
+  plugins: [],
+  init: () => {},
+  defaultLanguageForUnknown: undefined,
+  defaultLanguageForUnspecified: undefined,
+  defaultLanguage: undefined
+};
+/**
+ * Loads the provided {@code lang} into prism.
+ *
+ * @param {String} lang
+ *        Code of the language to load.
+ * @return {Object} The Prism language object for the provided {@code lang} code. {@code undefined} if the language is not known to Prism.
+ */
+
+function loadPrismLang(lang) {
+  if (!lang) return undefined;
+  let langObject = _prismjs.default.languages[lang];
+
+  if (langObject === undefined) {
+    (0, _components.default)([lang]);
+    langObject = _prismjs.default.languages[lang];
+  }
+
+  return langObject;
+}
+/**
+ * Loads the provided Prism plugin.a
+ * @param name
+ *        Name of the plugin to load
+ * @throws {Error} If there is no plugin with the provided {@code name}
+ */
+
+
+function loadPrismPlugin(name) {
+  try {
+    __webpack_require__(195)(`./${name}/prism-${name}`);
+  } catch (e) {
+    throw new Error(`Cannot load Prism plugin "${name}". Please check the spelling.`);
+  }
+}
+/**
+ * Select the language to use for highlighting, based on the provided options and the specified language.
+ *
+ * @param {Object} options
+ *        The options that were used to initialise the plugin.
+ * @param {String} lang
+ *        Code of the language to highlight the text in.
+ * @return {Array} An array where the first element is the name of the language to use, and the second element is the PRISM language object for that language.
+ */
+
+
+function selectLanguage(options, lang) {
+  let langToUse = lang;
+
+  if (langToUse === '' && options.defaultLanguageForUnspecified !== undefined) {
+    langToUse = options.defaultLanguageForUnspecified;
+  }
+
+  let prismLang = loadPrismLang(langToUse);
+
+  if (prismLang === undefined && options.defaultLanguageForUnknown !== undefined) {
+    langToUse = options.defaultLanguageForUnknown;
+    prismLang = loadPrismLang(langToUse);
+  }
+
+  return [langToUse, prismLang];
+}
+/**
+ * Highlights the provided text using Prism.
+ *
+ * @param {MarkdownIt} markdownit
+ *        Instance of MarkdownIt Class. This argument is bound in markdownItPrism().
+ * @param {MarkdownItPrismOptions} options
+ *        The options that have been used to initialise the plugin. This argument is bound in markdownItPrism().
+ * @param {String} text
+ *        The text to highlight.
+ * @param {String} lang
+ *        Code of the language to highlight the text in.
+ * @return {String} {@code text} wrapped in {@code &lt;pre&gt;} and {@code &lt;code&gt;}, both equipped with the appropriate class (markdown-it’s langPrefix + lang). If Prism knows {@code lang}, {@code text} will be highlighted by it.
+ */
+
+
+function highlight(markdownit, options, text, lang) {
+  let langToUse, prismLang;
+
+  var _selectLanguage = selectLanguage(options, lang);
+
+  var _selectLanguage2 = _slicedToArray(_selectLanguage, 2);
+
+  langToUse = _selectLanguage2[0];
+  prismLang = _selectLanguage2[1];
+  const code = prismLang ? _prismjs.default.highlight(text, prismLang) : markdownit.utils.escapeHtml(text);
+  const classAttribute = langToUse ? ` class="${markdownit.options.langPrefix}${langToUse}"` : '';
+  return `<pre${classAttribute}><code${classAttribute}>${code}</code></pre>`;
+}
+/**
+ * Checks whether an option represents a valid Prism language
+ *
+ * @param {MarkdownItPrismOptions} options
+ *        The options that have been used to initialise the plugin.
+ * @param optionName
+ *        The key of the option insides {@code options} that shall be checked.
+ * @throws {Error} If the option is not set to a valid Prism language.
+ */
+
+
+function checkLanguageOption(options, optionName) {
+  const language = options[optionName];
+
+  if (language !== undefined && loadPrismLang(language) === undefined) {
+    throw new Error(`Bad option ${optionName}: There is no Prism language '${language}'.`);
+  }
+}
+/**
+ * Initialisation function of the plugin. This function is not called directly by clients, but is rather provided
+ * to MarkdownIt’s {@link MarkdownIt.use} function.
+ *
+ * @param {MarkdownIt} markdownit
+ *        The markdown it instance the plugin is being registered to.
+ * @param {MarkdownItPrismOptions} useroptions
+ *        The options this plugin is being initialised with.
+ */
+
+
+function markdownItPrism(markdownit, useroptions) {
+  const options = Object.assign({}, DEFAULTS, useroptions);
+  checkLanguageOption(options, 'defaultLanguage');
+  checkLanguageOption(options, 'defaultLanguageForUnknown');
+  checkLanguageOption(options, 'defaultLanguageForUnspecified');
+  options.defaultLanguageForUnknown = options.defaultLanguageForUnknown || options.defaultLanguage;
+  options.defaultLanguageForUnspecified = options.defaultLanguageForUnspecified || options.defaultLanguage;
+  options.plugins.forEach(loadPrismPlugin);
+  options.init(_prismjs.default); // register ourselves as highlighter
+
+  markdownit.options.highlight = (...args) => highlight(markdownit, options, ...args);
+}
+
+module.exports = exports.default;
+module.exports.default = exports.default;
+
+/***/ }),
+/* 193 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/* WEBPACK VAR INJECTION */(function(global) {
+/* **********************************************
+     Begin prism-core.js
+********************************************** */
+
+var _self = (typeof window !== 'undefined')
+	? window   // if in browser
+	: (
+		(typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope)
+		? self // if in worker
+		: {}   // if in node js
+	);
+
+/**
+ * Prism: Lightweight, robust, elegant syntax highlighting
+ * MIT license http://www.opensource.org/licenses/mit-license.php/
+ * @author Lea Verou http://lea.verou.me
+ */
+
+var Prism = (function (_self){
+
+// Private helper vars
+var lang = /\blang(?:uage)?-([\w-]+)\b/i;
+var uniqueId = 0;
+
+
+var _ = {
+	manual: _self.Prism && _self.Prism.manual,
+	disableWorkerMessageHandler: _self.Prism && _self.Prism.disableWorkerMessageHandler,
+	util: {
+		encode: function (tokens) {
+			if (tokens instanceof Token) {
+				return new Token(tokens.type, _.util.encode(tokens.content), tokens.alias);
+			} else if (Array.isArray(tokens)) {
+				return tokens.map(_.util.encode);
+			} else {
+				return tokens.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\u00a0/g, ' ');
+			}
+		},
+
+		type: function (o) {
+			return Object.prototype.toString.call(o).slice(8, -1);
+		},
+
+		objId: function (obj) {
+			if (!obj['__id']) {
+				Object.defineProperty(obj, '__id', { value: ++uniqueId });
+			}
+			return obj['__id'];
+		},
+
+		// Deep clone a language definition (e.g. to extend it)
+		clone: function deepClone(o, visited) {
+			var clone, id, type = _.util.type(o);
+			visited = visited || {};
+
+			switch (type) {
+				case 'Object':
+					id = _.util.objId(o);
+					if (visited[id]) {
+						return visited[id];
+					}
+					clone = {};
+					visited[id] = clone;
+
+					for (var key in o) {
+						if (o.hasOwnProperty(key)) {
+							clone[key] = deepClone(o[key], visited);
+						}
+					}
+
+					return clone;
+
+				case 'Array':
+					id = _.util.objId(o);
+					if (visited[id]) {
+						return visited[id];
+					}
+					clone = [];
+					visited[id] = clone;
+
+					o.forEach(function (v, i) {
+						clone[i] = deepClone(v, visited);
+					});
+
+					return clone;
+
+				default:
+					return o;
+			}
+		},
+
+		/**
+		 * Returns the Prism language of the given element set by a `language-xxxx` or `lang-xxxx` class.
+		 *
+		 * If no language is set for the element or the element is `null` or `undefined`, `none` will be returned.
+		 *
+		 * @param {Element} element
+		 * @returns {string}
+		 */
+		getLanguage: function (element) {
+			while (element && !lang.test(element.className)) {
+				element = element.parentElement;
+			}
+			if (element) {
+				return (element.className.match(lang) || [, 'none'])[1].toLowerCase();
+			}
+			return 'none';
+		},
+
+		/**
+		 * Returns the script element that is currently executing.
+		 *
+		 * This does __not__ work for line script element.
+		 *
+		 * @returns {HTMLScriptElement | null}
+		 */
+		currentScript: function () {
+			if (typeof document === 'undefined') {
+				return null;
+			}
+			if ('currentScript' in document) {
+				return document.currentScript;
+			}
+
+			// IE11 workaround
+			// we'll get the src of the current script by parsing IE11's error stack trace
+			// this will not work for inline scripts
+
+			try {
+				throw new Error();
+			} catch (err) {
+				// Get file src url from stack. Specifically works with the format of stack traces in IE.
+				// A stack will look like this:
+				//
+				// Error
+				//    at _.util.currentScript (http://localhost/components/prism-core.js:119:5)
+				//    at Global code (http://localhost/components/prism-core.js:606:1)
+
+				var src = (/at [^(\r\n]*\((.*):.+:.+\)$/i.exec(err.stack) || [])[1];
+				if (src) {
+					var scripts = document.getElementsByTagName('script');
+					for (var i in scripts) {
+						if (scripts[i].src == src) {
+							return scripts[i];
+						}
+					}
+				}
+				return null;
+			}
+		}
+	},
+
+	languages: {
+		extend: function (id, redef) {
+			var lang = _.util.clone(_.languages[id]);
+
+			for (var key in redef) {
+				lang[key] = redef[key];
+			}
+
+			return lang;
+		},
+
+		/**
+		 * Insert a token before another token in a language literal
+		 * As this needs to recreate the object (we cannot actually insert before keys in object literals),
+		 * we cannot just provide an object, we need an object and a key.
+		 * @param inside The key (or language id) of the parent
+		 * @param before The key to insert before.
+		 * @param insert Object with the key/value pairs to insert
+		 * @param root The object that contains `inside`. If equal to Prism.languages, it can be omitted.
+		 */
+		insertBefore: function (inside, before, insert, root) {
+			root = root || _.languages;
+			var grammar = root[inside];
+			var ret = {};
+
+			for (var token in grammar) {
+				if (grammar.hasOwnProperty(token)) {
+
+					if (token == before) {
+						for (var newToken in insert) {
+							if (insert.hasOwnProperty(newToken)) {
+								ret[newToken] = insert[newToken];
+							}
+						}
+					}
+
+					// Do not insert token which also occur in insert. See #1525
+					if (!insert.hasOwnProperty(token)) {
+						ret[token] = grammar[token];
+					}
+				}
+			}
+
+			var old = root[inside];
+			root[inside] = ret;
+
+			// Update references in other language definitions
+			_.languages.DFS(_.languages, function(key, value) {
+				if (value === old && key != inside) {
+					this[key] = ret;
+				}
+			});
+
+			return ret;
+		},
+
+		// Traverse a language definition with Depth First Search
+		DFS: function DFS(o, callback, type, visited) {
+			visited = visited || {};
+
+			var objId = _.util.objId;
+
+			for (var i in o) {
+				if (o.hasOwnProperty(i)) {
+					callback.call(o, i, o[i], type || i);
+
+					var property = o[i],
+					    propertyType = _.util.type(property);
+
+					if (propertyType === 'Object' && !visited[objId(property)]) {
+						visited[objId(property)] = true;
+						DFS(property, callback, null, visited);
+					}
+					else if (propertyType === 'Array' && !visited[objId(property)]) {
+						visited[objId(property)] = true;
+						DFS(property, callback, i, visited);
+					}
+				}
+			}
+		}
+	},
+	plugins: {},
+
+	highlightAll: function(async, callback) {
+		_.highlightAllUnder(document, async, callback);
+	},
+
+	highlightAllUnder: function(container, async, callback) {
+		var env = {
+			callback: callback,
+			container: container,
+			selector: 'code[class*="language-"], [class*="language-"] code, code[class*="lang-"], [class*="lang-"] code'
+		};
+
+		_.hooks.run('before-highlightall', env);
+
+		env.elements = Array.prototype.slice.apply(env.container.querySelectorAll(env.selector));
+
+		_.hooks.run('before-all-elements-highlight', env);
+
+		for (var i = 0, element; element = env.elements[i++];) {
+			_.highlightElement(element, async === true, env.callback);
+		}
+	},
+
+	highlightElement: function(element, async, callback) {
+		// Find language
+		var language = _.util.getLanguage(element);
+		var grammar = _.languages[language];
+
+		// Set language on the element, if not present
+		element.className = element.className.replace(lang, '').replace(/\s+/g, ' ') + ' language-' + language;
+
+		// Set language on the parent, for styling
+		var parent = element.parentNode;
+		if (parent && parent.nodeName.toLowerCase() === 'pre') {
+			parent.className = parent.className.replace(lang, '').replace(/\s+/g, ' ') + ' language-' + language;
+		}
+
+		var code = element.textContent;
+
+		var env = {
+			element: element,
+			language: language,
+			grammar: grammar,
+			code: code
+		};
+
+		function insertHighlightedCode(highlightedCode) {
+			env.highlightedCode = highlightedCode;
+
+			_.hooks.run('before-insert', env);
+
+			env.element.innerHTML = env.highlightedCode;
+
+			_.hooks.run('after-highlight', env);
+			_.hooks.run('complete', env);
+			callback && callback.call(env.element);
+		}
+
+		_.hooks.run('before-sanity-check', env);
+
+		if (!env.code) {
+			_.hooks.run('complete', env);
+			callback && callback.call(env.element);
+			return;
+		}
+
+		_.hooks.run('before-highlight', env);
+
+		if (!env.grammar) {
+			insertHighlightedCode(_.util.encode(env.code));
+			return;
+		}
+
+		if (async && _self.Worker) {
+			var worker = new Worker(_.filename);
+
+			worker.onmessage = function(evt) {
+				insertHighlightedCode(evt.data);
+			};
+
+			worker.postMessage(JSON.stringify({
+				language: env.language,
+				code: env.code,
+				immediateClose: true
+			}));
+		}
+		else {
+			insertHighlightedCode(_.highlight(env.code, env.grammar, env.language));
+		}
+	},
+
+	highlight: function (text, grammar, language) {
+		var env = {
+			code: text,
+			grammar: grammar,
+			language: language
+		};
+		_.hooks.run('before-tokenize', env);
+		env.tokens = _.tokenize(env.code, env.grammar);
+		_.hooks.run('after-tokenize', env);
+		return Token.stringify(_.util.encode(env.tokens), env.language);
+	},
+
+	matchGrammar: function (text, strarr, grammar, index, startPos, oneshot, target) {
+		for (var token in grammar) {
+			if (!grammar.hasOwnProperty(token) || !grammar[token]) {
+				continue;
+			}
+
+			var patterns = grammar[token];
+			patterns = Array.isArray(patterns) ? patterns : [patterns];
+
+			for (var j = 0; j < patterns.length; ++j) {
+				if (target && target == token + ',' + j) {
+					return;
+				}
+
+				var pattern = patterns[j],
+					inside = pattern.inside,
+					lookbehind = !!pattern.lookbehind,
+					greedy = !!pattern.greedy,
+					lookbehindLength = 0,
+					alias = pattern.alias;
+
+				if (greedy && !pattern.pattern.global) {
+					// Without the global flag, lastIndex won't work
+					var flags = pattern.pattern.toString().match(/[imsuy]*$/)[0];
+					pattern.pattern = RegExp(pattern.pattern.source, flags + 'g');
+				}
+
+				pattern = pattern.pattern || pattern;
+
+				// Don’t cache length as it changes during the loop
+				for (var i = index, pos = startPos; i < strarr.length; pos += strarr[i].length, ++i) {
+
+					var str = strarr[i];
+
+					if (strarr.length > text.length) {
+						// Something went terribly wrong, ABORT, ABORT!
+						return;
+					}
+
+					if (str instanceof Token) {
+						continue;
+					}
+
+					if (greedy && i != strarr.length - 1) {
+						pattern.lastIndex = pos;
+						var match = pattern.exec(text);
+						if (!match) {
+							break;
+						}
+
+						var from = match.index + (lookbehind && match[1] ? match[1].length : 0),
+						    to = match.index + match[0].length,
+						    k = i,
+						    p = pos;
+
+						for (var len = strarr.length; k < len && (p < to || (!strarr[k].type && !strarr[k - 1].greedy)); ++k) {
+							p += strarr[k].length;
+							// Move the index i to the element in strarr that is closest to from
+							if (from >= p) {
+								++i;
+								pos = p;
+							}
+						}
+
+						// If strarr[i] is a Token, then the match starts inside another Token, which is invalid
+						if (strarr[i] instanceof Token) {
+							continue;
+						}
+
+						// Number of tokens to delete and replace with the new match
+						delNum = k - i;
+						str = text.slice(pos, p);
+						match.index -= pos;
+					} else {
+						pattern.lastIndex = 0;
+
+						var match = pattern.exec(str),
+							delNum = 1;
+					}
+
+					if (!match) {
+						if (oneshot) {
+							break;
+						}
+
+						continue;
+					}
+
+					if(lookbehind) {
+						lookbehindLength = match[1] ? match[1].length : 0;
+					}
+
+					var from = match.index + lookbehindLength,
+					    match = match[0].slice(lookbehindLength),
+					    to = from + match.length,
+					    before = str.slice(0, from),
+					    after = str.slice(to);
+
+					var args = [i, delNum];
+
+					if (before) {
+						++i;
+						pos += before.length;
+						args.push(before);
+					}
+
+					var wrapped = new Token(token, inside? _.tokenize(match, inside) : match, alias, match, greedy);
+
+					args.push(wrapped);
+
+					if (after) {
+						args.push(after);
+					}
+
+					Array.prototype.splice.apply(strarr, args);
+
+					if (delNum != 1)
+						_.matchGrammar(text, strarr, grammar, i, pos, true, token + ',' + j);
+
+					if (oneshot)
+						break;
+				}
+			}
+		}
+	},
+
+	tokenize: function(text, grammar) {
+		var strarr = [text];
+
+		var rest = grammar.rest;
+
+		if (rest) {
+			for (var token in rest) {
+				grammar[token] = rest[token];
+			}
+
+			delete grammar.rest;
+		}
+
+		_.matchGrammar(text, strarr, grammar, 0, 0, false);
+
+		return strarr;
+	},
+
+	hooks: {
+		all: {},
+
+		add: function (name, callback) {
+			var hooks = _.hooks.all;
+
+			hooks[name] = hooks[name] || [];
+
+			hooks[name].push(callback);
+		},
+
+		run: function (name, env) {
+			var callbacks = _.hooks.all[name];
+
+			if (!callbacks || !callbacks.length) {
+				return;
+			}
+
+			for (var i=0, callback; callback = callbacks[i++];) {
+				callback(env);
+			}
+		}
+	},
+
+	Token: Token
+};
+
+_self.Prism = _;
+
+function Token(type, content, alias, matchedStr, greedy) {
+	this.type = type;
+	this.content = content;
+	this.alias = alias;
+	// Copy of the full string this token was created from
+	this.length = (matchedStr || '').length|0;
+	this.greedy = !!greedy;
+}
+
+Token.stringify = function(o, language) {
+	if (typeof o == 'string') {
+		return o;
+	}
+
+	if (Array.isArray(o)) {
+		return o.map(function(element) {
+			return Token.stringify(element, language);
+		}).join('');
+	}
+
+	var env = {
+		type: o.type,
+		content: Token.stringify(o.content, language),
+		tag: 'span',
+		classes: ['token', o.type],
+		attributes: {},
+		language: language
+	};
+
+	if (o.alias) {
+		var aliases = Array.isArray(o.alias) ? o.alias : [o.alias];
+		Array.prototype.push.apply(env.classes, aliases);
+	}
+
+	_.hooks.run('wrap', env);
+
+	var attributes = Object.keys(env.attributes).map(function(name) {
+		return name + '="' + (env.attributes[name] || '').replace(/"/g, '&quot;') + '"';
+	}).join(' ');
+
+	return '<' + env.tag + ' class="' + env.classes.join(' ') + '"' + (attributes ? ' ' + attributes : '') + '>' + env.content + '</' + env.tag + '>';
+};
+
+if (!_self.document) {
+	if (!_self.addEventListener) {
+		// in Node.js
+		return _;
+	}
+
+	if (!_.disableWorkerMessageHandler) {
+		// In worker
+		_self.addEventListener('message', function (evt) {
+			var message = JSON.parse(evt.data),
+				lang = message.language,
+				code = message.code,
+				immediateClose = message.immediateClose;
+
+			_self.postMessage(_.highlight(code, _.languages[lang], lang));
+			if (immediateClose) {
+				_self.close();
+			}
+		}, false);
+	}
+
+	return _;
+}
+
+//Get current script and highlight
+var script = _.util.currentScript();
+
+if (script) {
+	_.filename = script.src;
+
+	if (script.hasAttribute('data-manual')) {
+		_.manual = true;
+	}
+}
+
+if (!_.manual) {
+	function highlightAutomaticallyCallback() {
+		if (!_.manual) {
+			_.highlightAll();
+		}
+	}
+
+	// If the document state is "loading", then we'll use DOMContentLoaded.
+	// If the document state is "interactive" and the prism.js script is deferred, then we'll also use the
+	// DOMContentLoaded event because there might be some plugins or languages which have also been deferred and they
+	// might take longer one animation frame to execute which can create a race condition where only some plugins have
+	// been loaded when Prism.highlightAll() is executed, depending on how fast resources are loaded.
+	// See https://github.com/PrismJS/prism/issues/2102
+	var readyState = document.readyState;
+	if (readyState === 'loading' || readyState === 'interactive' && script && script.defer) {
+		document.addEventListener('DOMContentLoaded', highlightAutomaticallyCallback);
+	} else {
+		if (window.requestAnimationFrame) {
+			window.requestAnimationFrame(highlightAutomaticallyCallback);
+		} else {
+			window.setTimeout(highlightAutomaticallyCallback, 16);
+		}
+	}
+}
+
+return _;
+
+})(_self);
+
+if (typeof module !== 'undefined' && module.exports) {
+	module.exports = Prism;
+}
+
+// hack for components to work correctly in node.js
+if (typeof global !== 'undefined') {
+	global.Prism = Prism;
+}
+
+
+/* **********************************************
+     Begin prism-markup.js
+********************************************** */
+
+Prism.languages.markup = {
+	'comment': /<!--[\s\S]*?-->/,
+	'prolog': /<\?[\s\S]+?\?>/,
+	'doctype': {
+		pattern: /<!DOCTYPE(?:[^>"'[\]]|"[^"]*"|'[^']*')+(?:\[(?:(?!<!--)[^"'\]]|"[^"]*"|'[^']*'|<!--[\s\S]*?-->)*\]\s*)?>/i,
+		greedy: true
+	},
+	'cdata': /<!\[CDATA\[[\s\S]*?]]>/i,
+	'tag': {
+		pattern: /<\/?(?!\d)[^\s>\/=$<%]+(?:\s(?:\s*[^\s>\/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s'">=]+(?=[\s>]))|(?=[\s/>])))+)?\s*\/?>/i,
+		greedy: true,
+		inside: {
+			'tag': {
+				pattern: /^<\/?[^\s>\/]+/i,
+				inside: {
+					'punctuation': /^<\/?/,
+					'namespace': /^[^\s>\/:]+:/
+				}
+			},
+			'attr-value': {
+				pattern: /=\s*(?:"[^"]*"|'[^']*'|[^\s'">=]+)/i,
+				inside: {
+					'punctuation': [
+						/^=/,
+						{
+							pattern: /^(\s*)["']|["']$/,
+							lookbehind: true
+						}
+					]
+				}
+			},
+			'punctuation': /\/?>/,
+			'attr-name': {
+				pattern: /[^\s>\/]+/,
+				inside: {
+					'namespace': /^[^\s>\/:]+:/
+				}
+			}
+
+		}
+	},
+	'entity': /&#?[\da-z]{1,8};/i
+};
+
+Prism.languages.markup['tag'].inside['attr-value'].inside['entity'] =
+	Prism.languages.markup['entity'];
+
+// Plugin to make entity title show the real entity, idea by Roman Komarov
+Prism.hooks.add('wrap', function(env) {
+
+	if (env.type === 'entity') {
+		env.attributes['title'] = env.content.replace(/&amp;/, '&');
+	}
+});
+
+Object.defineProperty(Prism.languages.markup.tag, 'addInlined', {
+	/**
+	 * Adds an inlined language to markup.
+	 *
+	 * An example of an inlined language is CSS with `<style>` tags.
+	 *
+	 * @param {string} tagName The name of the tag that contains the inlined language. This name will be treated as
+	 * case insensitive.
+	 * @param {string} lang The language key.
+	 * @example
+	 * addInlined('style', 'css');
+	 */
+	value: function addInlined(tagName, lang) {
+		var includedCdataInside = {};
+		includedCdataInside['language-' + lang] = {
+			pattern: /(^<!\[CDATA\[)[\s\S]+?(?=\]\]>$)/i,
+			lookbehind: true,
+			inside: Prism.languages[lang]
+		};
+		includedCdataInside['cdata'] = /^<!\[CDATA\[|\]\]>$/i;
+
+		var inside = {
+			'included-cdata': {
+				pattern: /<!\[CDATA\[[\s\S]*?\]\]>/i,
+				inside: includedCdataInside
+			}
+		};
+		inside['language-' + lang] = {
+			pattern: /[\s\S]+/,
+			inside: Prism.languages[lang]
+		};
+
+		var def = {};
+		def[tagName] = {
+			pattern: RegExp(/(<__[\s\S]*?>)(?:<!\[CDATA\[[\s\S]*?\]\]>\s*|[\s\S])*?(?=<\/__>)/.source.replace(/__/g, tagName), 'i'),
+			lookbehind: true,
+			greedy: true,
+			inside: inside
+		};
+
+		Prism.languages.insertBefore('markup', 'cdata', def);
+	}
+});
+
+Prism.languages.xml = Prism.languages.extend('markup', {});
+Prism.languages.html = Prism.languages.markup;
+Prism.languages.mathml = Prism.languages.markup;
+Prism.languages.svg = Prism.languages.markup;
+
+
+/* **********************************************
+     Begin prism-css.js
+********************************************** */
+
+(function (Prism) {
+
+	var string = /("|')(?:\\(?:\r\n|[\s\S])|(?!\1)[^\\\r\n])*\1/;
+
+	Prism.languages.css = {
+		'comment': /\/\*[\s\S]*?\*\//,
+		'atrule': {
+			pattern: /@[\w-]+[\s\S]*?(?:;|(?=\s*\{))/,
+			inside: {
+				'rule': /@[\w-]+/
+				// See rest below
+			}
+		},
+		'url': {
+			pattern: RegExp('url\\((?:' + string.source + '|[^\n\r()]*)\\)', 'i'),
+			inside: {
+				'function': /^url/i,
+				'punctuation': /^\(|\)$/
+			}
+		},
+		'selector': RegExp('[^{}\\s](?:[^{};"\']|' + string.source + ')*?(?=\\s*\\{)'),
+		'string': {
+			pattern: string,
+			greedy: true
+		},
+		'property': /[-_a-z\xA0-\uFFFF][-\w\xA0-\uFFFF]*(?=\s*:)/i,
+		'important': /!important\b/i,
+		'function': /[-a-z0-9]+(?=\()/i,
+		'punctuation': /[(){};:,]/
+	};
+
+	Prism.languages.css['atrule'].inside.rest = Prism.languages.css;
+
+	var markup = Prism.languages.markup;
+	if (markup) {
+		markup.tag.addInlined('style', 'css');
+
+		Prism.languages.insertBefore('inside', 'attr-value', {
+			'style-attr': {
+				pattern: /\s*style=("|')(?:\\[\s\S]|(?!\1)[^\\])*\1/i,
+				inside: {
+					'attr-name': {
+						pattern: /^\s*style/i,
+						inside: markup.tag.inside
+					},
+					'punctuation': /^\s*=\s*['"]|['"]\s*$/,
+					'attr-value': {
+						pattern: /.+/i,
+						inside: Prism.languages.css
+					}
+				},
+				alias: 'language-css'
+			}
+		}, markup.tag);
+	}
+
+}(Prism));
+
+
+/* **********************************************
+     Begin prism-clike.js
+********************************************** */
+
+Prism.languages.clike = {
+	'comment': [
+		{
+			pattern: /(^|[^\\])\/\*[\s\S]*?(?:\*\/|$)/,
+			lookbehind: true
+		},
+		{
+			pattern: /(^|[^\\:])\/\/.*/,
+			lookbehind: true,
+			greedy: true
+		}
+	],
+	'string': {
+		pattern: /(["'])(?:\\(?:\r\n|[\s\S])|(?!\1)[^\\\r\n])*\1/,
+		greedy: true
+	},
+	'class-name': {
+		pattern: /(\b(?:class|interface|extends|implements|trait|instanceof|new)\s+|\bcatch\s+\()[\w.\\]+/i,
+		lookbehind: true,
+		inside: {
+			'punctuation': /[.\\]/
+		}
+	},
+	'keyword': /\b(?:if|else|while|do|for|return|in|instanceof|function|new|try|throw|catch|finally|null|break|continue)\b/,
+	'boolean': /\b(?:true|false)\b/,
+	'function': /\w+(?=\()/,
+	'number': /\b0x[\da-f]+\b|(?:\b\d+\.?\d*|\B\.\d+)(?:e[+-]?\d+)?/i,
+	'operator': /[<>]=?|[!=]=?=?|--?|\+\+?|&&?|\|\|?|[?*/~^%]/,
+	'punctuation': /[{}[\];(),.:]/
+};
+
+
+/* **********************************************
+     Begin prism-javascript.js
+********************************************** */
+
+Prism.languages.javascript = Prism.languages.extend('clike', {
+	'class-name': [
+		Prism.languages.clike['class-name'],
+		{
+			pattern: /(^|[^$\w\xA0-\uFFFF])[_$A-Z\xA0-\uFFFF][$\w\xA0-\uFFFF]*(?=\.(?:prototype|constructor))/,
+			lookbehind: true
+		}
+	],
+	'keyword': [
+		{
+			pattern: /((?:^|})\s*)(?:catch|finally)\b/,
+			lookbehind: true
+		},
+		{
+			pattern: /(^|[^.]|\.\.\.\s*)\b(?:as|async(?=\s*(?:function\b|\(|[$\w\xA0-\uFFFF]|$))|await|break|case|class|const|continue|debugger|default|delete|do|else|enum|export|extends|for|from|function|get|if|implements|import|in|instanceof|interface|let|new|null|of|package|private|protected|public|return|set|static|super|switch|this|throw|try|typeof|undefined|var|void|while|with|yield)\b/,
+			lookbehind: true
+		},
+	],
+	'number': /\b(?:(?:0[xX](?:[\dA-Fa-f](?:_[\dA-Fa-f])?)+|0[bB](?:[01](?:_[01])?)+|0[oO](?:[0-7](?:_[0-7])?)+)n?|(?:\d(?:_\d)?)+n|NaN|Infinity)\b|(?:\b(?:\d(?:_\d)?)+\.?(?:\d(?:_\d)?)*|\B\.(?:\d(?:_\d)?)+)(?:[Ee][+-]?(?:\d(?:_\d)?)+)?/,
+	// Allow for all non-ASCII characters (See http://stackoverflow.com/a/2008444)
+	'function': /#?[_$a-zA-Z\xA0-\uFFFF][$\w\xA0-\uFFFF]*(?=\s*(?:\.\s*(?:apply|bind|call)\s*)?\()/,
+	'operator': /--|\+\+|\*\*=?|=>|&&|\|\||[!=]==|<<=?|>>>?=?|[-+*/%&|^!=<>]=?|\.{3}|\?[.?]?|[~:]/
+});
+
+Prism.languages.javascript['class-name'][0].pattern = /(\b(?:class|interface|extends|implements|instanceof|new)\s+)[\w.\\]+/;
+
+Prism.languages.insertBefore('javascript', 'keyword', {
+	'regex': {
+		pattern: /((?:^|[^$\w\xA0-\uFFFF."'\])\s])\s*)\/(?:\[(?:[^\]\\\r\n]|\\.)*]|\\.|[^/\\\[\r\n])+\/[gimyus]{0,6}(?=(?:\s|\/\*[\s\S]*?\*\/)*(?:$|[\r\n,.;:})\]]|\/\/))/,
+		lookbehind: true,
+		greedy: true
+	},
+	// This must be declared before keyword because we use "function" inside the look-forward
+	'function-variable': {
+		pattern: /#?[_$a-zA-Z\xA0-\uFFFF][$\w\xA0-\uFFFF]*(?=\s*[=:]\s*(?:async\s*)?(?:\bfunction\b|(?:\((?:[^()]|\([^()]*\))*\)|[_$a-zA-Z\xA0-\uFFFF][$\w\xA0-\uFFFF]*)\s*=>))/,
+		alias: 'function'
+	},
+	'parameter': [
+		{
+			pattern: /(function(?:\s+[_$A-Za-z\xA0-\uFFFF][$\w\xA0-\uFFFF]*)?\s*\(\s*)(?!\s)(?:[^()]|\([^()]*\))+?(?=\s*\))/,
+			lookbehind: true,
+			inside: Prism.languages.javascript
+		},
+		{
+			pattern: /[_$a-z\xA0-\uFFFF][$\w\xA0-\uFFFF]*(?=\s*=>)/i,
+			inside: Prism.languages.javascript
+		},
+		{
+			pattern: /(\(\s*)(?!\s)(?:[^()]|\([^()]*\))+?(?=\s*\)\s*=>)/,
+			lookbehind: true,
+			inside: Prism.languages.javascript
+		},
+		{
+			pattern: /((?:\b|\s|^)(?!(?:as|async|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|finally|for|from|function|get|if|implements|import|in|instanceof|interface|let|new|null|of|package|private|protected|public|return|set|static|super|switch|this|throw|try|typeof|undefined|var|void|while|with|yield)(?![$\w\xA0-\uFFFF]))(?:[_$A-Za-z\xA0-\uFFFF][$\w\xA0-\uFFFF]*\s*)\(\s*)(?!\s)(?:[^()]|\([^()]*\))+?(?=\s*\)\s*\{)/,
+			lookbehind: true,
+			inside: Prism.languages.javascript
+		}
+	],
+	'constant': /\b[A-Z](?:[A-Z_]|\dx?)*\b/
+});
+
+Prism.languages.insertBefore('javascript', 'string', {
+	'template-string': {
+		pattern: /`(?:\\[\s\S]|\${(?:[^{}]|{(?:[^{}]|{[^}]*})*})+}|(?!\${)[^\\`])*`/,
+		greedy: true,
+		inside: {
+			'template-punctuation': {
+				pattern: /^`|`$/,
+				alias: 'string'
+			},
+			'interpolation': {
+				pattern: /((?:^|[^\\])(?:\\{2})*)\${(?:[^{}]|{(?:[^{}]|{[^}]*})*})+}/,
+				lookbehind: true,
+				inside: {
+					'interpolation-punctuation': {
+						pattern: /^\${|}$/,
+						alias: 'punctuation'
+					},
+					rest: Prism.languages.javascript
+				}
+			},
+			'string': /[\s\S]+/
+		}
+	}
+});
+
+if (Prism.languages.markup) {
+	Prism.languages.markup.tag.addInlined('script', 'javascript');
+}
+
+Prism.languages.js = Prism.languages.javascript;
+
+
+/* **********************************************
+     Begin prism-file-highlight.js
+********************************************** */
+
+(function () {
+	if (typeof self === 'undefined' || !self.Prism || !self.document || !document.querySelector) {
+		return;
+	}
+
+	/**
+	 * @param {Element} [container=document]
+	 */
+	self.Prism.fileHighlight = function(container) {
+		container = container || document;
+
+		var Extensions = {
+			'js': 'javascript',
+			'py': 'python',
+			'rb': 'ruby',
+			'ps1': 'powershell',
+			'psm1': 'powershell',
+			'sh': 'bash',
+			'bat': 'batch',
+			'h': 'c',
+			'tex': 'latex'
+		};
+
+		Array.prototype.slice.call(container.querySelectorAll('pre[data-src]')).forEach(function (pre) {
+			// ignore if already loaded
+			if (pre.hasAttribute('data-src-loaded')) {
+				return;
+			}
+
+			// load current
+			var src = pre.getAttribute('data-src');
+
+			var language, parent = pre;
+			var lang = /\blang(?:uage)?-([\w-]+)\b/i;
+			while (parent && !lang.test(parent.className)) {
+				parent = parent.parentNode;
+			}
+
+			if (parent) {
+				language = (pre.className.match(lang) || [, ''])[1];
+			}
+
+			if (!language) {
+				var extension = (src.match(/\.(\w+)$/) || [, ''])[1];
+				language = Extensions[extension] || extension;
+			}
+
+			var code = document.createElement('code');
+			code.className = 'language-' + language;
+
+			pre.textContent = '';
+
+			code.textContent = 'Loading…';
+
+			pre.appendChild(code);
+
+			var xhr = new XMLHttpRequest();
+
+			xhr.open('GET', src, true);
+
+			xhr.onreadystatechange = function () {
+				if (xhr.readyState == 4) {
+
+					if (xhr.status < 400 && xhr.responseText) {
+						code.textContent = xhr.responseText;
+
+						Prism.highlightElement(code);
+						// mark as loaded
+						pre.setAttribute('data-src-loaded', '');
+					}
+					else if (xhr.status >= 400) {
+						code.textContent = '✖ Error ' + xhr.status + ' while fetching file: ' + xhr.statusText;
+					}
+					else {
+						code.textContent = '✖ Error: File does not exist or is empty';
+					}
+				}
+			};
+
+			xhr.send(null);
+		});
+	};
+
+	document.addEventListener('DOMContentLoaded', function () {
+		// execute inside handler, for dropping Event as argument
+		self.Prism.fileHighlight();
+	});
+
+})();
+
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(1)))
+
+/***/ }),
+/* 194 */
+/***/ (function(module, exports) {
+
+var components = {"core":{"meta":{"path":"components/prism-core.js","option":"mandatory"},"core":"Core"},"themes":{"meta":{"path":"themes/{id}.css","link":"index.html?theme={id}","exclusive":true},"prism":{"title":"Default","option":"default"},"prism-dark":"Dark","prism-funky":"Funky","prism-okaidia":{"title":"Okaidia","owner":"ocodia"},"prism-twilight":{"title":"Twilight","owner":"remybach"},"prism-coy":{"title":"Coy","owner":"tshedor"},"prism-solarizedlight":{"title":"Solarized Light","owner":"hectormatos2011 "},"prism-tomorrow":{"title":"Tomorrow Night","owner":"Rosey"}},"languages":{"meta":{"path":"components/prism-{id}","noCSS":true,"examplesPath":"examples/prism-{id}","addCheckAll":true},"markup":{"title":"Markup","alias":["html","xml","svg","mathml"],"aliasTitles":{"html":"HTML","xml":"XML","svg":"SVG","mathml":"MathML"},"option":"default"},"css":{"title":"CSS","option":"default","modify":"markup"},"clike":{"title":"C-like","option":"default","overrideExampleHeader":true},"javascript":{"title":"JavaScript","require":"clike","modify":"markup","alias":"js","option":"default"},"abap":{"title":"ABAP","owner":"dellagustin"},"abnf":{"title":"Augmented Backus–Naur form","owner":"RunDevelopment"},"actionscript":{"title":"ActionScript","require":"javascript","modify":"markup","owner":"Golmote"},"ada":{"title":"Ada","owner":"Lucretia"},"antlr4":{"title":"ANTLR4","alias":"g4","owner":"RunDevelopment"},"apacheconf":{"title":"Apache Configuration","owner":"GuiTeK"},"apl":{"title":"APL","owner":"ngn"},"applescript":{"title":"AppleScript","owner":"Golmote"},"aql":{"title":"AQL","owner":"RunDevelopment"},"arduino":{"title":"Arduino","require":"cpp","owner":"eisbehr-"},"arff":{"title":"ARFF","owner":"Golmote"},"asciidoc":{"alias":"adoc","title":"AsciiDoc","owner":"Golmote"},"asm6502":{"title":"6502 Assembly","owner":"kzurawel"},"aspnet":{"title":"ASP.NET (C#)","require":["markup","csharp"],"owner":"nauzilus"},"autohotkey":{"title":"AutoHotkey","owner":"aviaryan"},"autoit":{"title":"AutoIt","owner":"Golmote"},"bash":{"title":"Bash","alias":"shell","aliasTitles":{"shell":"Shell"},"owner":"zeitgeist87"},"basic":{"title":"BASIC","owner":"Golmote"},"batch":{"title":"Batch","owner":"Golmote"},"bbcode":{"title":"BBcode","owner":"RunDevelopment"},"bison":{"title":"Bison","require":"c","owner":"Golmote"},"bnf":{"title":"Backus–Naur form","alias":"rbnf","aliasTitles":{"rbnf":"Routing Backus–Naur form"},"owner":"RunDevelopment"},"brainfuck":{"title":"Brainfuck","owner":"Golmote"},"brightscript":{"title":"BrightScript","owner":"RunDevelopment"},"bro":{"title":"Bro","owner":"wayward710"},"c":{"title":"C","require":"clike","owner":"zeitgeist87"},"csharp":{"title":"C#","require":"clike","alias":["cs","dotnet"],"owner":"mvalipour"},"cpp":{"title":"C++","require":"c","owner":"zeitgeist87"},"cil":{"title":"CIL","owner":"sbrl"},"coffeescript":{"title":"CoffeeScript","require":"javascript","alias":"coffee","owner":"R-osey"},"cmake":{"title":"CMake","owner":"mjrogozinski"},"clojure":{"title":"Clojure","owner":"troglotit"},"crystal":{"title":"Crystal","require":"ruby","owner":"MakeNowJust"},"csp":{"title":"Content-Security-Policy","owner":"ScottHelme"},"css-extras":{"title":"CSS Extras","require":"css","modify":"css","owner":"milesj"},"d":{"title":"D","require":"clike","owner":"Golmote"},"dart":{"title":"Dart","require":"clike","owner":"Golmote"},"diff":{"title":"Diff","owner":"uranusjr"},"django":{"title":"Django/Jinja2","require":"markup-templating","alias":"jinja2","owner":"romanvm"},"dns-zone-file":{"title":"DNS zone file","owner":"RunDevelopment","alias":"dns-zone"},"docker":{"title":"Docker","alias":"dockerfile","owner":"JustinBeckwith"},"ebnf":{"title":"Extended Backus–Naur form","owner":"RunDevelopment"},"eiffel":{"title":"Eiffel","owner":"Conaclos"},"ejs":{"title":"EJS","require":["javascript","markup-templating"],"owner":"RunDevelopment"},"elixir":{"title":"Elixir","owner":"Golmote"},"elm":{"title":"Elm","owner":"zwilias"},"etlua":{"title":"Embedded Lua templating","require":["lua","markup-templating"],"owner":"RunDevelopment"},"erb":{"title":"ERB","require":["ruby","markup-templating"],"owner":"Golmote"},"erlang":{"title":"Erlang","owner":"Golmote"},"fsharp":{"title":"F#","require":"clike","owner":"simonreynolds7"},"firestore-security-rules":{"title":"Firestore security rules","require":"clike","owner":"RunDevelopment"},"flow":{"title":"Flow","require":"javascript","owner":"Golmote"},"fortran":{"title":"Fortran","owner":"Golmote"},"ftl":{"title":"FreeMarker Template Language","require":"markup-templating","owner":"RunDevelopment"},"gcode":{"title":"G-code","owner":"RunDevelopment"},"gdscript":{"title":"GDScript","owner":"RunDevelopment"},"gedcom":{"title":"GEDCOM","owner":"Golmote"},"gherkin":{"title":"Gherkin","owner":"hason"},"git":{"title":"Git","owner":"lgiraudel"},"glsl":{"title":"GLSL","require":"clike","owner":"Golmote"},"gml":{"title":"GameMaker Language","alias":"gamemakerlanguage","require":"clike","owner":"LiarOnce"},"go":{"title":"Go","require":"clike","owner":"arnehormann"},"graphql":{"title":"GraphQL","owner":"Golmote"},"groovy":{"title":"Groovy","require":"clike","owner":"robfletcher"},"haml":{"title":"Haml","require":"ruby","optional":["css","css-extras","coffeescript","erb","javascript","less","markdown","scss","textile"],"owner":"Golmote"},"handlebars":{"title":"Handlebars","require":"markup-templating","owner":"Golmote"},"haskell":{"title":"Haskell","alias":"hs","owner":"bholst"},"haxe":{"title":"Haxe","require":"clike","owner":"Golmote"},"hcl":{"title":"HCL","owner":"outsideris"},"http":{"title":"HTTP","optional":["css","javascript","json","markup"],"owner":"danielgtaylor"},"hpkp":{"title":"HTTP Public-Key-Pins","owner":"ScottHelme"},"hsts":{"title":"HTTP Strict-Transport-Security","owner":"ScottHelme"},"ichigojam":{"title":"IchigoJam","owner":"BlueCocoa"},"icon":{"title":"Icon","owner":"Golmote"},"inform7":{"title":"Inform 7","owner":"Golmote"},"ini":{"title":"Ini","owner":"aviaryan"},"io":{"title":"Io","owner":"AlesTsurko"},"j":{"title":"J","owner":"Golmote"},"java":{"title":"Java","require":"clike","owner":"sherblot"},"javadoc":{"title":"JavaDoc","require":["markup","java","javadoclike"],"modify":["java"],"optional":["scala"],"owner":"RunDevelopment"},"javadoclike":{"title":"JavaDoc-like","modify":["java","javascript","php"],"owner":"RunDevelopment"},"javastacktrace":{"title":"Java stack trace","owner":"RunDevelopment"},"jolie":{"title":"Jolie","require":"clike","owner":"thesave"},"jq":{"title":"JQ","owner":"RunDevelopment"},"jsdoc":{"title":"JSDoc","require":["javascript","javadoclike"],"modify":"javascript","optional":["actionscript","coffeescript"],"owner":"RunDevelopment"},"js-extras":{"title":"JS Extras","require":"javascript","modify":"javascript","optional":["actionscript","coffeescript","flow","n4js","typescript"],"owner":"RunDevelopment"},"js-templates":{"title":"JS Templates","require":"javascript","modify":"javascript","optional":["css","css-extras","graphql","markdown","markup"],"owner":"RunDevelopment"},"json":{"title":"JSON","owner":"CupOfTea696"},"jsonp":{"title":"JSONP","require":"json","owner":"RunDevelopment"},"json5":{"title":"JSON5","require":"json","owner":"RunDevelopment"},"julia":{"title":"Julia","owner":"cdagnino"},"keyman":{"title":"Keyman","owner":"mcdurdin"},"kotlin":{"title":"Kotlin","require":"clike","owner":"Golmote"},"latex":{"title":"LaTeX","alias":["tex","context"],"aliasTitles":{"tex":"TeX","context":"ConTeXt"},"owner":"japborst"},"latte":{"title":"Latte","require":["clike","markup-templating","php"],"owner":"nette"},"less":{"title":"Less","require":"css","optional":"css-extras","owner":"Golmote"},"lilypond":{"title":"LilyPond","require":"scheme","alias":"ly","owner":"RunDevelopment"},"liquid":{"title":"Liquid","owner":"cinhtau"},"lisp":{"title":"Lisp","alias":["emacs","elisp","emacs-lisp"],"owner":"JuanCaicedo"},"livescript":{"title":"LiveScript","owner":"Golmote"},"lolcode":{"title":"LOLCODE","owner":"Golmote"},"lua":{"title":"Lua","owner":"Golmote"},"makefile":{"title":"Makefile","owner":"Golmote"},"markdown":{"title":"Markdown","require":"markup","alias":"md","owner":"Golmote"},"markup-templating":{"title":"Markup templating","require":"markup","owner":"Golmote"},"matlab":{"title":"MATLAB","owner":"Golmote"},"mel":{"title":"MEL","owner":"Golmote"},"mizar":{"title":"Mizar","owner":"Golmote"},"monkey":{"title":"Monkey","owner":"Golmote"},"moonscript":{"title":"MoonScript","alias":"moon","owner":"RunDevelopment"},"n1ql":{"title":"N1QL","owner":"TMWilds"},"n4js":{"title":"N4JS","require":"javascript","optional":["jsdoc"],"alias":"n4jsd","owner":"bsmith-n4"},"nand2tetris-hdl":{"title":"Nand To Tetris HDL","owner":"stephanmax"},"nasm":{"title":"NASM","owner":"rbmj"},"neon":{"title":"NEON","owner":"nette"},"nginx":{"title":"nginx","owner":"westonganger","require":"clike"},"nim":{"title":"Nim","owner":"Golmote"},"nix":{"title":"Nix","owner":"Golmote"},"nsis":{"title":"NSIS","owner":"idleberg"},"objectivec":{"title":"Objective-C","require":"c","owner":"uranusjr"},"ocaml":{"title":"OCaml","owner":"Golmote"},"opencl":{"title":"OpenCL","require":"cpp","modify":["c","cpp"],"overrideExampleHeader":true,"owner":"Milania1"},"oz":{"title":"Oz","owner":"Golmote"},"parigp":{"title":"PARI/GP","owner":"Golmote"},"parser":{"title":"Parser","require":"markup","owner":"Golmote"},"pascal":{"title":"Pascal","alias":"objectpascal","aliasTitles":{"objectpascal":"Object Pascal"},"owner":"Golmote"},"pascaligo":{"title":"Pascaligo","owner":"DefinitelyNotAGoat"},"pcaxis":{"title":"PC-Axis","alias":"px","owner":"RunDevelopment"},"perl":{"title":"Perl","owner":"Golmote"},"php":{"title":"PHP","require":["clike","markup-templating"],"owner":"milesj"},"phpdoc":{"title":"PHPDoc","require":["php","javadoclike"],"modify":"php","owner":"RunDevelopment"},"php-extras":{"title":"PHP Extras","require":"php","modify":"php","owner":"milesj"},"plsql":{"title":"PL/SQL","require":"sql","owner":"Golmote"},"powershell":{"title":"PowerShell","owner":"nauzilus"},"processing":{"title":"Processing","require":"clike","owner":"Golmote"},"prolog":{"title":"Prolog","owner":"Golmote"},"properties":{"title":".properties","owner":"Golmote"},"protobuf":{"title":"Protocol Buffers","require":"clike","owner":"just-boris"},"pug":{"title":"Pug","require":["markup","javascript"],"optional":["coffeescript","ejs","handlebars","less","livescript","markdown","scss","stylus","twig"],"owner":"Golmote"},"puppet":{"title":"Puppet","owner":"Golmote"},"pure":{"title":"Pure","optional":["c","cpp","fortran"],"owner":"Golmote"},"python":{"title":"Python","alias":"py","owner":"multipetros"},"q":{"title":"Q (kdb+ database)","owner":"Golmote"},"qml":{"title":"QML","require":"javascript","owner":"RunDevelopment"},"qore":{"title":"Qore","require":"clike","owner":"temnroegg"},"r":{"title":"R","owner":"Golmote"},"jsx":{"title":"React JSX","require":["markup","javascript"],"optional":["jsdoc","js-extras","js-templates"],"owner":"vkbansal"},"tsx":{"title":"React TSX","require":["jsx","typescript"]},"renpy":{"title":"Ren'py","owner":"HyuchiaDiego"},"reason":{"title":"Reason","require":"clike","owner":"Golmote"},"regex":{"title":"Regex","modify":["actionscript","coffeescript","flow","javascript","typescript","vala"],"owner":"RunDevelopment"},"rest":{"title":"reST (reStructuredText)","owner":"Golmote"},"rip":{"title":"Rip","owner":"ravinggenius"},"roboconf":{"title":"Roboconf","owner":"Golmote"},"robotframework":{"title":"Robot Framework","alias":"robot","owner":"RunDevelopment"},"ruby":{"title":"Ruby","require":"clike","alias":"rb","owner":"samflores"},"rust":{"title":"Rust","owner":"Golmote"},"sas":{"title":"SAS","peerDependencies":["groovy","lua","sql"],"owner":"Golmote"},"sass":{"title":"Sass (Sass)","require":"css","owner":"Golmote"},"scss":{"title":"Sass (Scss)","require":"css","optional":"css-extras","owner":"MoOx"},"scala":{"title":"Scala","require":"java","owner":"jozic"},"scheme":{"title":"Scheme","owner":"bacchus123"},"shell-session":{"title":"Shell session","require":"bash","owner":"RunDevelopment"},"smalltalk":{"title":"Smalltalk","owner":"Golmote"},"smarty":{"title":"Smarty","require":"markup-templating","owner":"Golmote"},"solidity":{"title":"Solidity (Ethereum)","require":"clike","owner":"glachaud"},"soy":{"title":"Soy (Closure Template)","require":"markup-templating","owner":"Golmote"},"sparql":{"title":"SPARQL","require":"turtle","owner":"Triply-Dev","alias":"rq"},"splunk-spl":{"title":"Splunk SPL","owner":"RunDevelopment"},"sqf":{"title":"SQF: Status Quo Function (Arma 3)","require":"clike","owner":"RunDevelopment"},"sql":{"title":"SQL","owner":"multipetros"},"stylus":{"title":"Stylus","owner":"vkbansal"},"swift":{"title":"Swift","require":"clike","owner":"chrischares"},"tap":{"title":"TAP","owner":"isaacs","require":"yaml"},"tcl":{"title":"Tcl","owner":"PeterChaplin"},"textile":{"title":"Textile","require":"markup","optional":"css","owner":"Golmote"},"toml":{"title":"TOML","owner":"RunDevelopment"},"tt2":{"title":"Template Toolkit 2","require":["clike","markup-templating"],"owner":"gflohr"},"turtle":{"title":"Turtle","alias":["trig"],"aliasTitles":{"trig":"TriG"},"owner":"jakubklimek"},"twig":{"title":"Twig","require":"markup","owner":"brandonkelly"},"typescript":{"title":"TypeScript","require":"javascript","optional":"js-templates","alias":"ts","owner":"vkbansal"},"t4-cs":{"title":"T4 Text Templates (C#)","require":["t4-templating","csharp"],"alias":"t4","owner":"RunDevelopment"},"t4-vb":{"title":"T4 Text Templates (VB)","require":["t4-templating","visual-basic"],"owner":"RunDevelopment"},"t4-templating":{"title":"T4 templating","owner":"RunDevelopment"},"vala":{"title":"Vala","require":"clike","owner":"TemplarVolk"},"vbnet":{"title":"VB.Net","require":"basic","owner":"Bigsby"},"velocity":{"title":"Velocity","require":"markup","owner":"Golmote"},"verilog":{"title":"Verilog","owner":"a-rey"},"vhdl":{"title":"VHDL","owner":"a-rey"},"vim":{"title":"vim","owner":"westonganger"},"visual-basic":{"title":"Visual Basic","alias":"vb","owner":"Golmote"},"wasm":{"title":"WebAssembly","owner":"Golmote"},"wiki":{"title":"Wiki markup","require":"markup","owner":"Golmote"},"xeora":{"title":"Xeora","require":"markup","alias":"xeoracube","aliasTitles":{"xeoracube":"XeoraCube"},"owner":"freakmaxi"},"xojo":{"title":"Xojo (REALbasic)","owner":"Golmote"},"xquery":{"title":"XQuery","require":"markup","owner":"Golmote"},"yaml":{"title":"YAML","alias":"yml","owner":"hason"},"zig":{"title":"Zig","owner":"RunDevelopment"}},"plugins":{"meta":{"path":"plugins/{id}/prism-{id}","link":"plugins/{id}/"},"line-highlight":{"title":"Line Highlight","description":"Highlights specific lines and/or line ranges."},"line-numbers":{"title":"Line Numbers","description":"Line number at the beginning of code lines.","owner":"kuba-kubula"},"show-invisibles":{"title":"Show Invisibles","description":"Show hidden characters such as tabs and line breaks.","optional":["autolinker","data-uri-highlight"]},"autolinker":{"title":"Autolinker","description":"Converts URLs and emails in code to clickable links. Parses Markdown links in comments."},"wpd":{"title":"WebPlatform Docs","description":"Makes tokens link to <a href=\"https://webplatform.github.io/docs/\">WebPlatform.org documentation</a>. The links open in a new tab."},"custom-class":{"title":"Custom Class","description":"This plugin allows you to prefix Prism's default classes (<code>.comment</code> can become <code>.namespace--comment</code>) or replace them with your defined ones (like <code>.editor__comment</code>). You can even add new classes.","owner":"dvkndn","noCSS":true},"file-highlight":{"title":"File Highlight","description":"Fetch external files and highlight them with Prism. Used on the Prism website itself.","noCSS":true},"show-language":{"title":"Show Language","description":"Display the highlighted language in code blocks (inline code does not show the label).","owner":"nauzilus","noCSS":true,"require":"toolbar"},"jsonp-highlight":{"title":"JSONP Highlight","description":"Fetch content with JSONP and highlight some interesting content (e.g. GitHub/Gists or Bitbucket API).","noCSS":true,"owner":"nauzilus"},"highlight-keywords":{"title":"Highlight Keywords","description":"Adds special CSS classes for each keyword matched in the code. For example, the keyword <code>if</code> will have the class <code>keyword-if</code> as well. You can have fine grained control over the appearance of each keyword by providing your own CSS rules.","owner":"vkbansal","noCSS":true},"remove-initial-line-feed":{"title":"Remove initial line feed","description":"Removes the initial line feed in code blocks.","owner":"Golmote","noCSS":true},"inline-color":{"title":"Inline color","description":"Adds a small inline preview for colors in style sheets.","require":"css-extras","owner":"RunDevelopment"},"previewers":{"title":"Previewers","description":"Previewers for angles, colors, gradients, easing and time.","require":"css-extras","owner":"Golmote"},"autoloader":{"title":"Autoloader","description":"Automatically loads the needed languages to highlight the code blocks.","owner":"Golmote","noCSS":true},"keep-markup":{"title":"Keep Markup","description":"Prevents custom markup from being dropped out during highlighting.","owner":"Golmote","optional":"normalize-whitespace","noCSS":true},"command-line":{"title":"Command Line","description":"Display a command line with a prompt and, optionally, the output/response from the commands.","owner":"chriswells0"},"unescaped-markup":{"title":"Unescaped Markup","description":"Write markup without having to escape anything."},"normalize-whitespace":{"title":"Normalize Whitespace","description":"Supports multiple operations to normalize whitespace in code blocks.","owner":"zeitgeist87","optional":"unescaped-markup","noCSS":true},"data-uri-highlight":{"title":"Data-URI Highlight","description":"Highlights data-URI contents.","owner":"Golmote","noCSS":true},"toolbar":{"title":"Toolbar","description":"Attach a toolbar for plugins to easily register buttons on the top of a code block.","owner":"mAAdhaTTah"},"copy-to-clipboard":{"title":"Copy to Clipboard Button","description":"Add a button that copies the code block to the clipboard when clicked.","owner":"mAAdhaTTah","require":"toolbar","noCSS":true},"download-button":{"title":"Download Button","description":"A button in the toolbar of a code block adding a convenient way to download a code file.","owner":"Golmote","require":"toolbar","noCSS":true},"match-braces":{"title":"Match braces","description":"Highlights matching braces.","owner":"RunDevelopment"},"diff-highlight":{"title":"Diff Highlight","description":"Highlights the code inside diff blocks.","owner":"RunDevelopment","require":"diff"},"filter-highlight-all":{"title":"Filter highlightAll","description":"Filters the elements the <code>highlightAll</code> and <code>highlightAllUnder</code> methods actually highlight.","owner":"RunDevelopment","noCSS":true}}};
+if (typeof module !== 'undefined' && module.exports) { module.exports = components; }
+
+/***/ }),
+/* 195 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var map = {
+	"./autolinker/prism-autolinker": 30,
+	"./autolinker/prism-autolinker.css": 196,
+	"./autolinker/prism-autolinker.js": 30,
+	"./autolinker/prism-autolinker.min": 31,
+	"./autolinker/prism-autolinker.min.js": 31,
+	"./autoloader/prism-autoloader": 32,
+	"./autoloader/prism-autoloader.js": 32,
+	"./autoloader/prism-autoloader.min": 33,
+	"./autoloader/prism-autoloader.min.js": 33,
+	"./command-line/prism-command-line": 34,
+	"./command-line/prism-command-line.css": 198,
+	"./command-line/prism-command-line.js": 34,
+	"./command-line/prism-command-line.min": 35,
+	"./command-line/prism-command-line.min.js": 35,
+	"./copy-to-clipboard/prism-copy-to-clipboard": 36,
+	"./copy-to-clipboard/prism-copy-to-clipboard.js": 36,
+	"./copy-to-clipboard/prism-copy-to-clipboard.min": 38,
+	"./copy-to-clipboard/prism-copy-to-clipboard.min.js": 38,
+	"./custom-class/prism-custom-class": 39,
+	"./custom-class/prism-custom-class.js": 39,
+	"./custom-class/prism-custom-class.min": 40,
+	"./custom-class/prism-custom-class.min.js": 40,
+	"./data-uri-highlight/prism-data-uri-highlight": 41,
+	"./data-uri-highlight/prism-data-uri-highlight.js": 41,
+	"./data-uri-highlight/prism-data-uri-highlight.min": 42,
+	"./data-uri-highlight/prism-data-uri-highlight.min.js": 42,
+	"./diff-highlight/prism-diff-highlight": 43,
+	"./diff-highlight/prism-diff-highlight.css": 200,
+	"./diff-highlight/prism-diff-highlight.js": 43,
+	"./diff-highlight/prism-diff-highlight.min": 44,
+	"./diff-highlight/prism-diff-highlight.min.js": 44,
+	"./download-button/prism-download-button": 45,
+	"./download-button/prism-download-button.js": 45,
+	"./download-button/prism-download-button.min": 46,
+	"./download-button/prism-download-button.min.js": 46,
+	"./file-highlight/prism-file-highlight": 47,
+	"./file-highlight/prism-file-highlight.js": 47,
+	"./file-highlight/prism-file-highlight.min": 48,
+	"./file-highlight/prism-file-highlight.min.js": 48,
+	"./filter-highlight-all/prism-filter-highlight-all": 49,
+	"./filter-highlight-all/prism-filter-highlight-all.js": 49,
+	"./filter-highlight-all/prism-filter-highlight-all.min": 50,
+	"./filter-highlight-all/prism-filter-highlight-all.min.js": 50,
+	"./highlight-keywords/prism-highlight-keywords": 51,
+	"./highlight-keywords/prism-highlight-keywords.js": 51,
+	"./highlight-keywords/prism-highlight-keywords.min": 52,
+	"./highlight-keywords/prism-highlight-keywords.min.js": 52,
+	"./inline-color/prism-inline-color": 53,
+	"./inline-color/prism-inline-color.css": 202,
+	"./inline-color/prism-inline-color.js": 53,
+	"./inline-color/prism-inline-color.min": 54,
+	"./inline-color/prism-inline-color.min.js": 54,
+	"./jsonp-highlight/prism-jsonp-highlight": 55,
+	"./jsonp-highlight/prism-jsonp-highlight.js": 55,
+	"./jsonp-highlight/prism-jsonp-highlight.min": 56,
+	"./jsonp-highlight/prism-jsonp-highlight.min.js": 56,
+	"./keep-markup/prism-keep-markup": 57,
+	"./keep-markup/prism-keep-markup.js": 57,
+	"./keep-markup/prism-keep-markup.min": 58,
+	"./keep-markup/prism-keep-markup.min.js": 58,
+	"./line-highlight/prism-line-highlight": 59,
+	"./line-highlight/prism-line-highlight.css": 204,
+	"./line-highlight/prism-line-highlight.js": 59,
+	"./line-highlight/prism-line-highlight.min": 60,
+	"./line-highlight/prism-line-highlight.min.js": 60,
+	"./line-numbers/prism-line-numbers": 61,
+	"./line-numbers/prism-line-numbers.css": 206,
+	"./line-numbers/prism-line-numbers.js": 61,
+	"./line-numbers/prism-line-numbers.min": 62,
+	"./line-numbers/prism-line-numbers.min.js": 62,
+	"./match-braces/prism-match-braces": 63,
+	"./match-braces/prism-match-braces.css": 208,
+	"./match-braces/prism-match-braces.js": 63,
+	"./match-braces/prism-match-braces.min": 64,
+	"./match-braces/prism-match-braces.min.js": 64,
+	"./normalize-whitespace/prism-normalize-whitespace": 65,
+	"./normalize-whitespace/prism-normalize-whitespace.js": 65,
+	"./normalize-whitespace/prism-normalize-whitespace.min": 66,
+	"./normalize-whitespace/prism-normalize-whitespace.min.js": 66,
+	"./previewers/prism-previewers": 67,
+	"./previewers/prism-previewers.css": 210,
+	"./previewers/prism-previewers.js": 67,
+	"./previewers/prism-previewers.min": 68,
+	"./previewers/prism-previewers.min.js": 68,
+	"./remove-initial-line-feed/prism-remove-initial-line-feed": 69,
+	"./remove-initial-line-feed/prism-remove-initial-line-feed.js": 69,
+	"./remove-initial-line-feed/prism-remove-initial-line-feed.min": 70,
+	"./remove-initial-line-feed/prism-remove-initial-line-feed.min.js": 70,
+	"./show-invisibles/prism-show-invisibles": 71,
+	"./show-invisibles/prism-show-invisibles.css": 212,
+	"./show-invisibles/prism-show-invisibles.js": 71,
+	"./show-invisibles/prism-show-invisibles.min": 72,
+	"./show-invisibles/prism-show-invisibles.min.js": 72,
+	"./show-language/prism-show-language": 73,
+	"./show-language/prism-show-language.js": 73,
+	"./show-language/prism-show-language.min": 74,
+	"./show-language/prism-show-language.min.js": 74,
+	"./toolbar/prism-toolbar": 75,
+	"./toolbar/prism-toolbar.css": 214,
+	"./toolbar/prism-toolbar.js": 75,
+	"./toolbar/prism-toolbar.min": 76,
+	"./toolbar/prism-toolbar.min.js": 76,
+	"./unescaped-markup/prism-unescaped-markup": 77,
+	"./unescaped-markup/prism-unescaped-markup.css": 216,
+	"./unescaped-markup/prism-unescaped-markup.js": 77,
+	"./unescaped-markup/prism-unescaped-markup.min": 78,
+	"./unescaped-markup/prism-unescaped-markup.min.js": 78,
+	"./wpd/prism-wpd": 79,
+	"./wpd/prism-wpd.css": 218,
+	"./wpd/prism-wpd.js": 79,
+	"./wpd/prism-wpd.min": 80,
+	"./wpd/prism-wpd.min.js": 80
+};
+function webpackContext(req) {
+	return __webpack_require__(webpackContextResolve(req));
+};
+function webpackContextResolve(req) {
+	var id = map[req];
+	if(!(id + 1)) // check for number or string
+		throw new Error("Cannot find module '" + req + "'.");
+	return id;
+};
+webpackContext.keys = function webpackContextKeys() {
+	return Object.keys(map);
+};
+webpackContext.resolve = webpackContextResolve;
+module.exports = webpackContext;
+webpackContext.id = 195;
+
+/***/ }),
+/* 196 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(197);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-autolinker.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-autolinker.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 197 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, ".token a {\n\tcolor: inherit;\n}", ""]);
+
+// exports
+
+
+/***/ }),
+/* 198 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(199);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-command-line.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-command-line.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 199 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, ".command-line-prompt {\n\tborder-right: 1px solid #999;\n\tdisplay: block;\n\tfloat: left;\n\tfont-size: 100%;\n\tletter-spacing: -1px;\n\tmargin-right: 1em;\n\tpointer-events: none;\n\n\t-webkit-user-select: none;\n\t-moz-user-select: none;\n\t-ms-user-select: none;\n\tuser-select: none;\n}\n\n.command-line-prompt > span:before {\n\tcolor: #999;\n\tcontent: ' ';\n\tdisplay: block;\n\tpadding-right: 0.8em;\n}\n\n.command-line-prompt > span[data-user]:before {\n\tcontent: \"[\" attr(data-user) \"@\" attr(data-host) \"] $\";\n}\n\n.command-line-prompt > span[data-user=\"root\"]:before {\n\tcontent: \"[\" attr(data-user) \"@\" attr(data-host) \"] #\";\n}\n\n.command-line-prompt > span[data-prompt]:before {\n\tcontent: attr(data-prompt);\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 200 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(201);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-diff-highlight.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-diff-highlight.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 201 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "pre.diff-highlight > code .token.deleted:not(.prefix),\npre > code.diff-highlight .token.deleted:not(.prefix) {\n\tbackground-color: rgba(255, 0, 0, .1);\n\tcolor: inherit;\n\tdisplay: block;\n}\n\npre.diff-highlight > code .token.inserted:not(.prefix),\npre > code.diff-highlight .token.inserted:not(.prefix) {\n\tbackground-color: rgba(0, 255, 128, .1);\n\tcolor: inherit;\n\tdisplay: block;\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 202 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(203);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-inline-color.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-inline-color.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 203 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "span.inline-color {\n\tdisplay: inline-block;\n\theight: 1.333ch;\n\twidth: 1.333ch;\n\tmargin: 0 .333ch;\n\tbox-sizing: border-box;\n\tborder: 1px solid white;\n\toutline: 1px solid black;\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 204 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(205);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-line-highlight.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-line-highlight.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 205 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "pre[data-line] {\n\tposition: relative;\n\tpadding: 1em 0 1em 3em;\n}\n\n.line-highlight {\n\tposition: absolute;\n\tleft: 0;\n\tright: 0;\n\tpadding: inherit 0;\n\tmargin-top: 1em; /* Same as .prism’s padding-top */\n\n\tbackground: hsla(24, 20%, 50%,.08);\n\tbackground: linear-gradient(to right, hsla(24, 20%, 50%,.1) 70%, hsla(24, 20%, 50%,0));\n\n\tpointer-events: none;\n\n\tline-height: inherit;\n\twhite-space: pre;\n}\n\n\t.line-highlight:before,\n\t.line-highlight[data-end]:after {\n\t\tcontent: attr(data-start);\n\t\tposition: absolute;\n\t\ttop: .4em;\n\t\tleft: .6em;\n\t\tmin-width: 1em;\n\t\tpadding: 0 .5em;\n\t\tbackground-color: hsla(24, 20%, 50%,.4);\n\t\tcolor: hsl(24, 20%, 95%);\n\t\tfont: bold 65%/1.5 sans-serif;\n\t\ttext-align: center;\n\t\tvertical-align: .3em;\n\t\tborder-radius: 999px;\n\t\ttext-shadow: none;\n\t\tbox-shadow: 0 1px white;\n\t}\n\n\t.line-highlight[data-end]:after {\n\t\tcontent: attr(data-end);\n\t\ttop: auto;\n\t\tbottom: .4em;\n\t}\n\n.line-numbers .line-highlight:before,\n.line-numbers .line-highlight:after {\n\tcontent: none;\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 206 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(207);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-line-numbers.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-line-numbers.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 207 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "pre[class*=\"language-\"].line-numbers {\n\tposition: relative;\n\tpadding-left: 3.8em;\n\tcounter-reset: linenumber;\n}\n\npre[class*=\"language-\"].line-numbers > code {\n\tposition: relative;\n\twhite-space: inherit;\n}\n\n.line-numbers .line-numbers-rows {\n\tposition: absolute;\n\tpointer-events: none;\n\ttop: 0;\n\tfont-size: 100%;\n\tleft: -3.8em;\n\twidth: 3em; /* works for line-numbers below 1000 lines */\n\tletter-spacing: -1px;\n\tborder-right: 1px solid #999;\n\n\t-webkit-user-select: none;\n\t-moz-user-select: none;\n\t-ms-user-select: none;\n\tuser-select: none;\n\n}\n\n\t.line-numbers-rows > span {\n\t\tpointer-events: none;\n\t\tdisplay: block;\n\t\tcounter-increment: linenumber;\n\t}\n\n\t\t.line-numbers-rows > span:before {\n\t\t\tcontent: counter(linenumber);\n\t\t\tcolor: #999;\n\t\t\tdisplay: block;\n\t\t\tpadding-right: 0.8em;\n\t\t\ttext-align: right;\n\t\t}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 208 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(209);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-match-braces.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-match-braces.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 209 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, ".token.punctuation.brace-hover,\n.token.punctuation.brace-selected {\n\toutline: solid 1px;\n}\n\n.rainbow-braces .token.punctuation.brace-level-1,\n.rainbow-braces .token.punctuation.brace-level-5,\n.rainbow-braces .token.punctuation.brace-level-9 {\n\tcolor: #E50;\n\topacity: 1;\n}\n.rainbow-braces .token.punctuation.brace-level-2,\n.rainbow-braces .token.punctuation.brace-level-6,\n.rainbow-braces .token.punctuation.brace-level-10 {\n\tcolor: #0B3;\n\topacity: 1;\n}\n.rainbow-braces .token.punctuation.brace-level-3,\n.rainbow-braces .token.punctuation.brace-level-7,\n.rainbow-braces .token.punctuation.brace-level-11 {\n\tcolor: #26F;\n\topacity: 1;\n}\n.rainbow-braces .token.punctuation.brace-level-4,\n.rainbow-braces .token.punctuation.brace-level-8,\n.rainbow-braces .token.punctuation.brace-level-12 {\n\tcolor: #E0E;\n\topacity: 1;\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 210 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(211);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-previewers.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-previewers.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 211 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, ".prism-previewer,\n.prism-previewer:before,\n.prism-previewer:after {\n\tposition: absolute;\n\tpointer-events: none;\n}\n.prism-previewer,\n.prism-previewer:after {\n\tleft: 50%;\n}\n.prism-previewer {\n\tmargin-top: -48px;\n\twidth: 32px;\n\theight: 32px;\n\tmargin-left: -16px;\n\n\topacity: 0;\n\t-webkit-transition: opacity .25s;\n\t-o-transition: opacity .25s;\n\ttransition: opacity .25s;\n}\n.prism-previewer.flipped {\n\tmargin-top: 0;\n\tmargin-bottom: -48px;\n}\n.prism-previewer:before,\n.prism-previewer:after {\n\tcontent: '';\n\tposition: absolute;\n\tpointer-events: none;\n}\n.prism-previewer:before {\n\ttop: -5px;\n\tright: -5px;\n\tleft: -5px;\n\tbottom: -5px;\n\tborder-radius: 10px;\n\tborder: 5px solid #fff;\n\tbox-shadow: 0 0 3px rgba(0, 0, 0, 0.5) inset, 0 0 10px rgba(0, 0, 0, 0.75);\n}\n.prism-previewer:after {\n\ttop: 100%;\n\twidth: 0;\n\theight: 0;\n\tmargin: 5px 0 0 -7px;\n\tborder: 7px solid transparent;\n\tborder-color: rgba(255, 0, 0, 0);\n\tborder-top-color: #fff;\n}\n.prism-previewer.flipped:after {\n\ttop: auto;\n\tbottom: 100%;\n\tmargin-top: 0;\n\tmargin-bottom: 5px;\n\tborder-top-color: rgba(255, 0, 0, 0);\n\tborder-bottom-color: #fff;\n}\n.prism-previewer.active {\n\topacity: 1;\n}\n\n.prism-previewer-angle:before {\n\tborder-radius: 50%;\n\tbackground: #fff;\n}\n.prism-previewer-angle:after {\n\tmargin-top: 4px;\n}\n.prism-previewer-angle svg {\n\twidth: 32px;\n\theight: 32px;\n\t-webkit-transform: rotate(-90deg);\n\t-moz-transform: rotate(-90deg);\n\t-ms-transform: rotate(-90deg);\n\t-o-transform: rotate(-90deg);\n\ttransform: rotate(-90deg);\n}\n.prism-previewer-angle[data-negative] svg {\n\t-webkit-transform: scaleX(-1) rotate(-90deg);\n\t-moz-transform: scaleX(-1) rotate(-90deg);\n\t-ms-transform: scaleX(-1) rotate(-90deg);\n\t-o-transform: scaleX(-1) rotate(-90deg);\n\ttransform: scaleX(-1) rotate(-90deg);\n}\n.prism-previewer-angle circle {\n\tfill: transparent;\n\tstroke: hsl(200, 10%, 20%);\n\tstroke-opacity: 0.9;\n\tstroke-width: 32;\n\tstroke-dasharray: 0, 500;\n}\n\n.prism-previewer-gradient {\n\tbackground-image: linear-gradient(45deg, #bbb 25%, transparent 25%, transparent 75%, #bbb 75%, #bbb), linear-gradient(45deg, #bbb 25%, #eee 25%, #eee 75%, #bbb 75%, #bbb);\n\tbackground-size: 10px 10px;\n\tbackground-position: 0 0, 5px 5px;\n\n\twidth: 64px;\n\tmargin-left: -32px;\n}\n.prism-previewer-gradient:before {\n\tcontent: none;\n}\n.prism-previewer-gradient div {\n\tposition: absolute;\n\ttop: -5px;\n\tleft: -5px;\n\tright: -5px;\n\tbottom: -5px;\n\tborder-radius: 10px;\n\tborder: 5px solid #fff;\n\tbox-shadow: 0 0 3px rgba(0, 0, 0, 0.5) inset, 0 0 10px rgba(0, 0, 0, 0.75);\n}\n\n.prism-previewer-color {\n\tbackground-image: linear-gradient(45deg, #bbb 25%, transparent 25%, transparent 75%, #bbb 75%, #bbb), linear-gradient(45deg, #bbb 25%, #eee 25%, #eee 75%, #bbb 75%, #bbb);\n\tbackground-size: 10px 10px;\n\tbackground-position: 0 0, 5px 5px;\n}\n.prism-previewer-color:before {\n\tbackground-color: inherit;\n\tbackground-clip: padding-box;\n}\n\n.prism-previewer-easing {\n\tmargin-top: -76px;\n\tmargin-left: -30px;\n\twidth: 60px;\n\theight: 60px;\n\tbackground: #333;\n}\n.prism-previewer-easing.flipped {\n\tmargin-bottom: -116px;\n}\n.prism-previewer-easing svg {\n\twidth: 60px;\n\theight: 60px;\n}\n.prism-previewer-easing circle {\n\tfill: hsl(200, 10%, 20%);\n\tstroke: white;\n}\n.prism-previewer-easing path {\n\tfill: none;\n\tstroke: white;\n\tstroke-linecap: round;\n\tstroke-width: 4;\n}\n.prism-previewer-easing line {\n\tstroke: white;\n\tstroke-opacity: 0.5;\n\tstroke-width: 2;\n}\n\n@-webkit-keyframes prism-previewer-time {\n\t0% {\n\t\tstroke-dasharray: 0, 500;\n\t\tstroke-dashoffset: 0;\n\t}\n\t50% {\n\t\tstroke-dasharray: 100, 500;\n\t\tstroke-dashoffset: 0;\n\t}\n\t100% {\n\t\tstroke-dasharray: 0, 500;\n\t\tstroke-dashoffset: -100;\n\t}\n}\n\n@-o-keyframes prism-previewer-time {\n\t0% {\n\t\tstroke-dasharray: 0, 500;\n\t\tstroke-dashoffset: 0;\n\t}\n\t50% {\n\t\tstroke-dasharray: 100, 500;\n\t\tstroke-dashoffset: 0;\n\t}\n\t100% {\n\t\tstroke-dasharray: 0, 500;\n\t\tstroke-dashoffset: -100;\n\t}\n}\n\n@-moz-keyframes prism-previewer-time {\n\t0% {\n\t\tstroke-dasharray: 0, 500;\n\t\tstroke-dashoffset: 0;\n\t}\n\t50% {\n\t\tstroke-dasharray: 100, 500;\n\t\tstroke-dashoffset: 0;\n\t}\n\t100% {\n\t\tstroke-dasharray: 0, 500;\n\t\tstroke-dashoffset: -100;\n\t}\n}\n\n@keyframes prism-previewer-time {\n\t0% {\n\t\tstroke-dasharray: 0, 500;\n\t\tstroke-dashoffset: 0;\n\t}\n\t50% {\n\t\tstroke-dasharray: 100, 500;\n\t\tstroke-dashoffset: 0;\n\t}\n\t100% {\n\t\tstroke-dasharray: 0, 500;\n\t\tstroke-dashoffset: -100;\n\t}\n}\n\n.prism-previewer-time:before {\n\tborder-radius: 50%;\n\tbackground: #fff;\n}\n.prism-previewer-time:after {\n\tmargin-top: 4px;\n}\n.prism-previewer-time svg {\n\twidth: 32px;\n\theight: 32px;\n\t-webkit-transform: rotate(-90deg);\n\t-moz-transform: rotate(-90deg);\n\t-ms-transform: rotate(-90deg);\n\t-o-transform: rotate(-90deg);\n\ttransform: rotate(-90deg);\n}\n.prism-previewer-time circle {\n\tfill: transparent;\n\tstroke: hsl(200, 10%, 20%);\n\tstroke-opacity: 0.9;\n\tstroke-width: 32;\n\tstroke-dasharray: 0, 500;\n\tstroke-dashoffset: 0;\n\t-webkit-animation: prism-previewer-time linear infinite 3s;\n\t-moz-animation: prism-previewer-time linear infinite 3s;\n\t-o-animation: prism-previewer-time linear infinite 3s;\n\tanimation: prism-previewer-time linear infinite 3s;\n}", ""]);
+
+// exports
+
+
+/***/ }),
+/* 212 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(213);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-show-invisibles.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-show-invisibles.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 213 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, ".token.tab:not(:empty),\n.token.cr,\n.token.lf,\n.token.space {\n\tposition: relative;\n}\n\n.token.tab:not(:empty):before,\n.token.cr:before,\n.token.lf:before,\n.token.space:before {\n\tcolor: #808080;\n\topacity: 0.6;\n\tposition: absolute;\n}\n\n.token.tab:not(:empty):before {\n\tcontent: '\\21E5';\n}\n\n.token.cr:before {\n\tcontent: '\\240D';\n}\n\n.token.crlf:before {\n\tcontent: '\\240D\\240A';\n}\n.token.lf:before {\n\tcontent: '\\240A';\n}\n\n.token.space:before {\n\tcontent: '\\B7';\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 214 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(215);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-toolbar.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-toolbar.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 215 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "div.code-toolbar {\n\tposition: relative;\n}\n\ndiv.code-toolbar > .toolbar {\n\tposition: absolute;\n\ttop: .3em;\n\tright: .2em;\n\ttransition: opacity 0.3s ease-in-out;\n\topacity: 0;\n}\n\ndiv.code-toolbar:hover > .toolbar {\n\topacity: 1;\n}\n\n/* Separate line b/c rules are thrown out if selector is invalid.\n   IE11 and old Edge versions don't support :focus-within. */\ndiv.code-toolbar:focus-within > .toolbar {\n\topacity: 1;\n}\n\ndiv.code-toolbar > .toolbar .toolbar-item {\n\tdisplay: inline-block;\n}\n\ndiv.code-toolbar > .toolbar a {\n\tcursor: pointer;\n}\n\ndiv.code-toolbar > .toolbar button {\n\tbackground: none;\n\tborder: 0;\n\tcolor: inherit;\n\tfont: inherit;\n\tline-height: normal;\n\toverflow: visible;\n\tpadding: 0;\n\t-webkit-user-select: none; /* for button */\n\t-moz-user-select: none;\n\t-ms-user-select: none;\n}\n\ndiv.code-toolbar > .toolbar a,\ndiv.code-toolbar > .toolbar button,\ndiv.code-toolbar > .toolbar span {\n\tcolor: #bbb;\n\tfont-size: .8em;\n\tpadding: 0 .5em;\n\tbackground: #f5f2f0;\n\tbackground: rgba(224, 224, 224, 0.2);\n\tbox-shadow: 0 2px 0 0 rgba(0,0,0,0.2);\n\tborder-radius: .5em;\n}\n\ndiv.code-toolbar > .toolbar a:hover,\ndiv.code-toolbar > .toolbar a:focus,\ndiv.code-toolbar > .toolbar button:hover,\ndiv.code-toolbar > .toolbar button:focus,\ndiv.code-toolbar > .toolbar span:hover,\ndiv.code-toolbar > .toolbar span:focus {\n\tcolor: inherit;\n\ttext-decoration: none;\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 216 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(217);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-unescaped-markup.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-unescaped-markup.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 217 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "/* Fallback, in case JS does not run, to ensure the code is at least visible */\n[class*='lang-'] script[type='text/plain'],\n[class*='language-'] script[type='text/plain'],\nscript[type='text/plain'][class*='lang-'],\nscript[type='text/plain'][class*='language-'] {\n\tdisplay: block;\n\tfont: 100% Consolas, Monaco, monospace;\n\twhite-space: pre;\n\toverflow: auto;\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 218 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(219);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../../css-loader/index.js!./prism-wpd.css", function() {
+			var newContent = require("!!../../../css-loader/index.js!./prism-wpd.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 219 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "code[class*=\"language-\"] a[href],\npre[class*=\"language-\"] a[href] {\n\tcursor: help;\n\ttext-decoration: none;\n}\n\ncode[class*=\"language-\"] a[href]:hover,\npre[class*=\"language-\"] a[href]:hover {\n\tcursor: help;\n\ttext-decoration: underline;\n}", ""]);
+
+// exports
+
+
+/***/ }),
+/* 220 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;/*!
@@ -62986,6 +68623,1360 @@ var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_
 	exports.default = autosize;
 	module.exports = exports['default'];
 });
+
+/***/ }),
+/* 221 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(222);
+if(typeof content === 'string') content = [[module.i, content, '']];
+// Prepare cssTransformation
+var transform;
+
+var options = {}
+options.transform = transform
+// add the styles to the DOM
+var update = __webpack_require__(3)(content, options);
+if(content.locals) module.exports = content.locals;
+// Hot Module Replacement
+if(false) {
+	// When the styles change, update the <style> tags
+	if(!content.locals) {
+		module.hot.accept("!!../../css-loader/index.js!./prism.css", function() {
+			var newContent = require("!!../../css-loader/index.js!./prism.css");
+			if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+			update(newContent);
+		});
+	}
+	// When the module is disposed, remove the <style> tags
+	module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 222 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "/**\n * prism.js default theme for JavaScript, CSS and HTML\n * Based on dabblet (http://dabblet.com)\n * @author Lea Verou\n */\n\ncode[class*=\"language-\"],\npre[class*=\"language-\"] {\n\tcolor: black;\n\tbackground: none;\n\ttext-shadow: 0 1px white;\n\tfont-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;\n\tfont-size: 1em;\n\ttext-align: left;\n\twhite-space: pre;\n\tword-spacing: normal;\n\tword-break: normal;\n\tword-wrap: normal;\n\tline-height: 1.5;\n\n\t-moz-tab-size: 4;\n\t-o-tab-size: 4;\n\ttab-size: 4;\n\n\t-webkit-hyphens: none;\n\t-moz-hyphens: none;\n\t-ms-hyphens: none;\n\thyphens: none;\n}\n\npre[class*=\"language-\"]::-moz-selection, pre[class*=\"language-\"] ::-moz-selection,\ncode[class*=\"language-\"]::-moz-selection, code[class*=\"language-\"] ::-moz-selection {\n\ttext-shadow: none;\n\tbackground: #b3d4fc;\n}\n\npre[class*=\"language-\"]::selection, pre[class*=\"language-\"] ::selection,\ncode[class*=\"language-\"]::selection, code[class*=\"language-\"] ::selection {\n\ttext-shadow: none;\n\tbackground: #b3d4fc;\n}\n\n@media print {\n\tcode[class*=\"language-\"],\n\tpre[class*=\"language-\"] {\n\t\ttext-shadow: none;\n\t}\n}\n\n/* Code blocks */\npre[class*=\"language-\"] {\n\tpadding: 1em;\n\tmargin: .5em 0;\n\toverflow: auto;\n}\n\n:not(pre) > code[class*=\"language-\"],\npre[class*=\"language-\"] {\n\tbackground: #f5f2f0;\n}\n\n/* Inline code */\n:not(pre) > code[class*=\"language-\"] {\n\tpadding: .1em;\n\tborder-radius: .3em;\n\twhite-space: normal;\n}\n\n.token.comment,\n.token.prolog,\n.token.doctype,\n.token.cdata {\n\tcolor: slategray;\n}\n\n.token.punctuation {\n\tcolor: #999;\n}\n\n.token.namespace {\n\topacity: .7;\n}\n\n.token.property,\n.token.tag,\n.token.boolean,\n.token.number,\n.token.constant,\n.token.symbol,\n.token.deleted {\n\tcolor: #905;\n}\n\n.token.selector,\n.token.attr-name,\n.token.string,\n.token.char,\n.token.builtin,\n.token.inserted {\n\tcolor: #690;\n}\n\n.token.operator,\n.token.entity,\n.token.url,\n.language-css .token.string,\n.style .token.string {\n\tcolor: #9a6e3a;\n\tbackground: hsla(0, 0%, 100%, .5);\n}\n\n.token.atrule,\n.token.attr-value,\n.token.keyword {\n\tcolor: #07a;\n}\n\n.token.function,\n.token.class-name {\n\tcolor: #DD4A68;\n}\n\n.token.regex,\n.token.important,\n.token.variable {\n\tcolor: #e90;\n}\n\n.token.important,\n.token.bold {\n\tfont-weight: bold;\n}\n.token.italic {\n\tfont-style: italic;\n}\n\n.token.entity {\n\tcursor: help;\n}\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 223 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var render = function() {
+  var _vm = this
+  var _h = _vm.$createElement
+  var _c = _vm._self._c || _h
+  return _c("div", { staticClass: "card" }, [
+    _vm._m(0),
+    _vm._v(" "),
+    _c("div", { staticClass: "card-body tab-content" }, [
+      _c(
+        "div",
+        { staticClass: "tab-pane active", attrs: { id: "write" } },
+        [_vm._t("default")],
+        2
+      ),
+      _vm._v(" "),
+      _c("div", {
+        staticClass: "tab-pane",
+        attrs: { id: "preview" },
+        domProps: { innerHTML: _vm._s(_vm.preview) }
+      })
+    ])
+  ])
+}
+var staticRenderFns = [
+  function() {
+    var _vm = this
+    var _h = _vm.$createElement
+    var _c = _vm._self._c || _h
+    return _c("div", { staticClass: "card-header" }, [
+      _c("ul", { staticClass: "nav nav-tabs card-header-tabs" }, [
+        _c("li", { staticClass: "nav-item" }, [
+          _c(
+            "a",
+            {
+              staticClass: "nav-link active",
+              attrs: { "data-toggle": "tab", href: "#write" }
+            },
+            [_vm._v("Write")]
+          )
+        ]),
+        _vm._v(" "),
+        _c("li", { staticClass: "nav-item" }, [
+          _c(
+            "a",
+            {
+              staticClass: "nav-link",
+              attrs: { "data-toggle": "tab", href: "#preview" }
+            },
+            [_vm._v("Preview")]
+          )
+        ])
+      ])
+    ])
+  }
+]
+render._withStripped = true
+module.exports = { render: render, staticRenderFns: staticRenderFns }
+if (false) {
+  module.hot.accept()
+  if (module.hot.data) {
+    require("vue-hot-reload-api")      .rerender("data-v-7e98915a", module.exports)
+  }
+}
+
+/***/ }),
+/* 224 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var render = function() {
+  var _vm = this
+  var _h = _vm.$createElement
+  var _c = _vm._self._c || _h
+  return _c("div", { staticClass: "row justify-content-center" }, [
+    _c("div", { staticClass: "col-md-12" }, [
+      _c("div", { staticClass: "card" }, [
+        _vm.editing
+          ? _c("form", { staticClass: "card-body" }, [
+              _c("div", { staticClass: "card-title" }, [
+                _c("input", {
+                  directives: [
+                    {
+                      name: "model",
+                      rawName: "v-model",
+                      value: _vm.title,
+                      expression: "title"
+                    }
+                  ],
+                  staticClass: "form-control form-control-lg",
+                  attrs: { type: "text" },
+                  domProps: { value: _vm.title },
+                  on: {
+                    input: function($event) {
+                      if ($event.target.composing) {
+                        return
+                      }
+                      _vm.title = $event.target.value
+                    }
+                  }
+                })
+              ]),
+              _vm._v(" "),
+              _c("hr"),
+              _vm._v(" "),
+              _c("div", { staticClass: "media" }, [
+                _c("div", { staticClass: "media-body" }, [
+                  _c(
+                    "div",
+                    { staticClass: "form-group" },
+                    [
+                      _c("m-editor", { attrs: { body: _vm.body } }, [
+                        _c("textarea", {
+                          directives: [
+                            {
+                              name: "model",
+                              rawName: "v-model",
+                              value: _vm.body,
+                              expression: "body"
+                            }
+                          ],
+                          staticClass: "form-control",
+                          attrs: { rows: "10", required: "" },
+                          domProps: { value: _vm.body },
+                          on: {
+                            input: function($event) {
+                              if ($event.target.composing) {
+                                return
+                              }
+                              _vm.body = $event.target.value
+                            }
+                          }
+                        })
+                      ])
+                    ],
+                    1
+                  ),
+                  _vm._v(" "),
+                  _c(
+                    "button",
+                    {
+                      staticClass: "btn btn-primary",
+                      attrs: { type: "button", disabled: _vm.isInvalid },
+                      on: {
+                        click: function($event) {
+                          $event.preventDefault()
+                          return _vm.update($event)
+                        }
+                      }
+                    },
+                    [_vm._v("Update")]
+                  ),
+                  _vm._v(" "),
+                  _c(
+                    "button",
+                    {
+                      staticClass: "btn btn-outline-secondary",
+                      on: {
+                        click: function($event) {
+                          $event.preventDefault()
+                          return _vm.cancel($event)
+                        }
+                      }
+                    },
+                    [_vm._v("Cancel")]
+                  )
+                ])
+              ])
+            ])
+          : _c("div", { staticClass: "card-body" }, [
+              _c("div", { staticClass: "card-title" }, [
+                _c("div", { staticClass: "d-flex align-items-center" }, [
+                  _c("h1", [_vm._v(_vm._s(_vm.title))]),
+                  _vm._v(" "),
+                  _vm._m(0)
+                ])
+              ]),
+              _vm._v(" "),
+              _c("hr"),
+              _vm._v(" "),
+              _c(
+                "div",
+                { staticClass: "media" },
+                [
+                  _c("vote", {
+                    attrs: { model: _vm.question, name: "question" }
+                  }),
+                  _vm._v(" "),
+                  _c("div", { staticClass: "media-body" }, [
+                    _c("div", {
+                      domProps: { innerHTML: _vm._s(_vm.bodyhtml) }
+                    }),
+                    _vm._v(" "),
+                    _c("div", { staticClass: "row" }, [
+                      _c("div", { staticClass: "col-4" }, [
+                        _c("div", { staticClass: "ml-auto" }, [
+                          _vm.authorize("modify", _vm.question)
+                            ? _c(
+                                "a",
+                                {
+                                  staticClass: "btn btn-sm btn-outline-info",
+                                  on: {
+                                    click: function($event) {
+                                      $event.preventDefault()
+                                      return _vm.edit($event)
+                                    }
+                                  }
+                                },
+                                [_vm._v("Edit")]
+                              )
+                            : _vm._e(),
+                          _vm._v(" "),
+                          _vm.authorize("deleteQuestion", _vm.question)
+                            ? _c(
+                                "button",
+                                {
+                                  staticClass: "btn btn-sm btn-outline-danger",
+                                  on: { click: _vm.destroy }
+                                },
+                                [_vm._v("Delete")]
+                              )
+                            : _vm._e()
+                        ])
+                      ]),
+                      _vm._v(" "),
+                      _c("div", { staticClass: "col-4" }),
+                      _vm._v(" "),
+                      _c(
+                        "div",
+                        { staticClass: "col-4" },
+                        [
+                          _c("user-info", {
+                            attrs: { model: _vm.question, label: "asked" }
+                          })
+                        ],
+                        1
+                      )
+                    ])
+                  ])
+                ],
+                1
+              )
+            ])
+      ])
+    ])
+  ])
+}
+var staticRenderFns = [
+  function() {
+    var _vm = this
+    var _h = _vm.$createElement
+    var _c = _vm._self._c || _h
+    return _c("div", { staticClass: "ml-auto" }, [
+      _c(
+        "a",
+        {
+          staticClass: "btn btn-outline-secondary",
+          attrs: { href: "/questions" }
+        },
+        [
+          _vm._v(
+            "\n                                Back to all Questions\n                            "
+          )
+        ]
+      )
+    ])
+  }
+]
+render._withStripped = true
+module.exports = { render: render, staticRenderFns: staticRenderFns }
+if (false) {
+  module.hot.accept()
+  if (module.hot.data) {
+    require("vue-hot-reload-api")      .rerender("data-v-417b5bc6", module.exports)
+  }
+}
+
+/***/ }),
+/* 225 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var disposed = false
+function injectStyle (ssrContext) {
+  if (disposed) return
+  __webpack_require__(226)
+}
+var normalizeComponent = __webpack_require__(5)
+/* script */
+var __vue_script__ = __webpack_require__(230)
+/* template */
+var __vue_template__ = __webpack_require__(237)
+/* template functional */
+var __vue_template_functional__ = false
+/* styles */
+var __vue_styles__ = injectStyle
+/* scopeId */
+var __vue_scopeId__ = null
+/* moduleIdentifier (server only) */
+var __vue_module_identifier__ = null
+var Component = normalizeComponent(
+  __vue_script__,
+  __vue_template__,
+  __vue_template_functional__,
+  __vue_styles__,
+  __vue_scopeId__,
+  __vue_module_identifier__
+)
+Component.options.__file = "resources/assets/js/components/Answers.vue"
+
+/* hot reload */
+if (false) {(function () {
+  var hotAPI = require("vue-hot-reload-api")
+  hotAPI.install(require("vue"), false)
+  if (!hotAPI.compatible) return
+  module.hot.accept()
+  if (!module.hot.data) {
+    hotAPI.createRecord("data-v-2fc0920e", Component.options)
+  } else {
+    hotAPI.reload("data-v-2fc0920e", Component.options)
+  }
+  module.hot.dispose(function (data) {
+    disposed = true
+  })
+})()}
+
+module.exports = Component.exports
+
+
+/***/ }),
+/* 226 */
+/***/ (function(module, exports, __webpack_require__) {
+
+// style-loader: Adds some css to the DOM by adding a <style> tag
+
+// load the styles
+var content = __webpack_require__(227);
+if(typeof content === 'string') content = [[module.i, content, '']];
+if(content.locals) module.exports = content.locals;
+// add the styles to the DOM
+var update = __webpack_require__(228)("5a2e9b34", content, false, {});
+// Hot Module Replacement
+if(false) {
+ // When the styles change, update the <style> tags
+ if(!content.locals) {
+   module.hot.accept("!!../../../../node_modules/css-loader/index.js!../../../../node_modules/vue-loader/lib/style-compiler/index.js?{\"vue\":true,\"id\":\"data-v-2fc0920e\",\"scoped\":false,\"hasInlineConfig\":true}!../../../../node_modules/vue-loader/lib/selector.js?type=styles&index=0!./Answers.vue", function() {
+     var newContent = require("!!../../../../node_modules/css-loader/index.js!../../../../node_modules/vue-loader/lib/style-compiler/index.js?{\"vue\":true,\"id\":\"data-v-2fc0920e\",\"scoped\":false,\"hasInlineConfig\":true}!../../../../node_modules/vue-loader/lib/selector.js?type=styles&index=0!./Answers.vue");
+     if(typeof newContent === 'string') newContent = [[module.id, newContent, '']];
+     update(newContent);
+   });
+ }
+ // When the module is disposed, remove the <style> tags
+ module.hot.dispose(function() { update(); });
+}
+
+/***/ }),
+/* 227 */
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__(2)(false);
+// imports
+
+
+// module
+exports.push([module.i, "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n", ""]);
+
+// exports
+
+
+/***/ }),
+/* 228 */
+/***/ (function(module, exports, __webpack_require__) {
+
+/*
+  MIT License http://www.opensource.org/licenses/mit-license.php
+  Author Tobias Koppers @sokra
+  Modified by Evan You @yyx990803
+*/
+
+var hasDocument = typeof document !== 'undefined'
+
+if (typeof DEBUG !== 'undefined' && DEBUG) {
+  if (!hasDocument) {
+    throw new Error(
+    'vue-style-loader cannot be used in a non-browser environment. ' +
+    "Use { target: 'node' } in your Webpack config to indicate a server-rendering environment."
+  ) }
+}
+
+var listToStyles = __webpack_require__(229)
+
+/*
+type StyleObject = {
+  id: number;
+  parts: Array<StyleObjectPart>
+}
+
+type StyleObjectPart = {
+  css: string;
+  media: string;
+  sourceMap: ?string
+}
+*/
+
+var stylesInDom = {/*
+  [id: number]: {
+    id: number,
+    refs: number,
+    parts: Array<(obj?: StyleObjectPart) => void>
+  }
+*/}
+
+var head = hasDocument && (document.head || document.getElementsByTagName('head')[0])
+var singletonElement = null
+var singletonCounter = 0
+var isProduction = false
+var noop = function () {}
+var options = null
+var ssrIdKey = 'data-vue-ssr-id'
+
+// Force single-tag solution on IE6-9, which has a hard limit on the # of <style>
+// tags it will allow on a page
+var isOldIE = typeof navigator !== 'undefined' && /msie [6-9]\b/.test(navigator.userAgent.toLowerCase())
+
+module.exports = function (parentId, list, _isProduction, _options) {
+  isProduction = _isProduction
+
+  options = _options || {}
+
+  var styles = listToStyles(parentId, list)
+  addStylesToDom(styles)
+
+  return function update (newList) {
+    var mayRemove = []
+    for (var i = 0; i < styles.length; i++) {
+      var item = styles[i]
+      var domStyle = stylesInDom[item.id]
+      domStyle.refs--
+      mayRemove.push(domStyle)
+    }
+    if (newList) {
+      styles = listToStyles(parentId, newList)
+      addStylesToDom(styles)
+    } else {
+      styles = []
+    }
+    for (var i = 0; i < mayRemove.length; i++) {
+      var domStyle = mayRemove[i]
+      if (domStyle.refs === 0) {
+        for (var j = 0; j < domStyle.parts.length; j++) {
+          domStyle.parts[j]()
+        }
+        delete stylesInDom[domStyle.id]
+      }
+    }
+  }
+}
+
+function addStylesToDom (styles /* Array<StyleObject> */) {
+  for (var i = 0; i < styles.length; i++) {
+    var item = styles[i]
+    var domStyle = stylesInDom[item.id]
+    if (domStyle) {
+      domStyle.refs++
+      for (var j = 0; j < domStyle.parts.length; j++) {
+        domStyle.parts[j](item.parts[j])
+      }
+      for (; j < item.parts.length; j++) {
+        domStyle.parts.push(addStyle(item.parts[j]))
+      }
+      if (domStyle.parts.length > item.parts.length) {
+        domStyle.parts.length = item.parts.length
+      }
+    } else {
+      var parts = []
+      for (var j = 0; j < item.parts.length; j++) {
+        parts.push(addStyle(item.parts[j]))
+      }
+      stylesInDom[item.id] = { id: item.id, refs: 1, parts: parts }
+    }
+  }
+}
+
+function createStyleElement () {
+  var styleElement = document.createElement('style')
+  styleElement.type = 'text/css'
+  head.appendChild(styleElement)
+  return styleElement
+}
+
+function addStyle (obj /* StyleObjectPart */) {
+  var update, remove
+  var styleElement = document.querySelector('style[' + ssrIdKey + '~="' + obj.id + '"]')
+
+  if (styleElement) {
+    if (isProduction) {
+      // has SSR styles and in production mode.
+      // simply do nothing.
+      return noop
+    } else {
+      // has SSR styles but in dev mode.
+      // for some reason Chrome can't handle source map in server-rendered
+      // style tags - source maps in <style> only works if the style tag is
+      // created and inserted dynamically. So we remove the server rendered
+      // styles and inject new ones.
+      styleElement.parentNode.removeChild(styleElement)
+    }
+  }
+
+  if (isOldIE) {
+    // use singleton mode for IE9.
+    var styleIndex = singletonCounter++
+    styleElement = singletonElement || (singletonElement = createStyleElement())
+    update = applyToSingletonTag.bind(null, styleElement, styleIndex, false)
+    remove = applyToSingletonTag.bind(null, styleElement, styleIndex, true)
+  } else {
+    // use multi-style-tag mode in all other cases
+    styleElement = createStyleElement()
+    update = applyToTag.bind(null, styleElement)
+    remove = function () {
+      styleElement.parentNode.removeChild(styleElement)
+    }
+  }
+
+  update(obj)
+
+  return function updateStyle (newObj /* StyleObjectPart */) {
+    if (newObj) {
+      if (newObj.css === obj.css &&
+          newObj.media === obj.media &&
+          newObj.sourceMap === obj.sourceMap) {
+        return
+      }
+      update(obj = newObj)
+    } else {
+      remove()
+    }
+  }
+}
+
+var replaceText = (function () {
+  var textStore = []
+
+  return function (index, replacement) {
+    textStore[index] = replacement
+    return textStore.filter(Boolean).join('\n')
+  }
+})()
+
+function applyToSingletonTag (styleElement, index, remove, obj) {
+  var css = remove ? '' : obj.css
+
+  if (styleElement.styleSheet) {
+    styleElement.styleSheet.cssText = replaceText(index, css)
+  } else {
+    var cssNode = document.createTextNode(css)
+    var childNodes = styleElement.childNodes
+    if (childNodes[index]) styleElement.removeChild(childNodes[index])
+    if (childNodes.length) {
+      styleElement.insertBefore(cssNode, childNodes[index])
+    } else {
+      styleElement.appendChild(cssNode)
+    }
+  }
+}
+
+function applyToTag (styleElement, obj) {
+  var css = obj.css
+  var media = obj.media
+  var sourceMap = obj.sourceMap
+
+  if (media) {
+    styleElement.setAttribute('media', media)
+  }
+  if (options.ssrId) {
+    styleElement.setAttribute(ssrIdKey, obj.id)
+  }
+
+  if (sourceMap) {
+    // https://developer.chrome.com/devtools/docs/javascript-debugging
+    // this makes source maps inside style tags work properly in Chrome
+    css += '\n/*# sourceURL=' + sourceMap.sources[0] + ' */'
+    // http://stackoverflow.com/a/26603875
+    css += '\n/*# sourceMappingURL=data:application/json;base64,' + btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap)))) + ' */'
+  }
+
+  if (styleElement.styleSheet) {
+    styleElement.styleSheet.cssText = css
+  } else {
+    while (styleElement.firstChild) {
+      styleElement.removeChild(styleElement.firstChild)
+    }
+    styleElement.appendChild(document.createTextNode(css))
+  }
+}
+
+
+/***/ }),
+/* 229 */
+/***/ (function(module, exports) {
+
+/**
+ * Translates the list format produced by css-loader into something
+ * easier to manipulate.
+ */
+module.exports = function listToStyles (parentId, list) {
+  var styles = []
+  var newStyles = {}
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i]
+    var id = item[0]
+    var css = item[1]
+    var media = item[2]
+    var sourceMap = item[3]
+    var part = {
+      id: parentId + ':' + i,
+      css: css,
+      media: media,
+      sourceMap: sourceMap
+    }
+    if (!newStyles[id]) {
+      styles.push(newStyles[id] = { id: id, parts: [part] })
+    } else {
+      newStyles[id].parts.push(part)
+    }
+  }
+  return styles
+}
+
+
+/***/ }),
+/* 230 */
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Answer_vue__ = __webpack_require__(231);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Answer_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0__Answer_vue__);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__NewAnswer_vue__ = __webpack_require__(234);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__NewAnswer_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1__NewAnswer_vue__);
+function _toConsumableArray(arr) { if (Array.isArray(arr)) { for (var i = 0, arr2 = Array(arr.length); i < arr.length; i++) { arr2[i] = arr[i]; } return arr2; } else { return Array.from(arr); } }
+
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+
+
+
+
+/* harmony default export */ __webpack_exports__["default"] = ({
+    props: ["question"],
+
+    data: function data() {
+        return {
+            questionId: this.question.id,
+            count: this.question.answers_count,
+            answers: [],
+            nextUrl: null
+        };
+    },
+    created: function created() {
+        this.fetch("/questions/" + this.questionId + "/answers");
+    },
+
+
+    methods: {
+        add: function add(answer) {
+            this.answers.push(answer);
+            this.count++;
+        },
+        fetch: function fetch(endpoint) {
+            var _this = this;
+
+            axios.get(endpoint).then(function (_ref) {
+                var _answers;
+
+                var data = _ref.data;
+
+                (_answers = _this.answers).push.apply(_answers, _toConsumableArray(data.data));
+                _this.nextUrl = data.next_page_url;
+            });
+        },
+        remove: function remove(index) {
+            this.answers.splice(index, 1);
+            this.count--;
+        }
+    },
+
+    computed: {
+        title: function title() {
+            return this.count + " " + (this.count > 1 ? "Answers" : "Answer");
+        }
+    },
+
+    components: {
+        Answer: __WEBPACK_IMPORTED_MODULE_0__Answer_vue___default.a, NewAnswer: __WEBPACK_IMPORTED_MODULE_1__NewAnswer_vue___default.a
+    }
+});
+
+/***/ }),
+/* 231 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var disposed = false
+var normalizeComponent = __webpack_require__(5)
+/* script */
+var __vue_script__ = __webpack_require__(232)
+/* template */
+var __vue_template__ = __webpack_require__(233)
+/* template functional */
+var __vue_template_functional__ = false
+/* styles */
+var __vue_styles__ = null
+/* scopeId */
+var __vue_scopeId__ = null
+/* moduleIdentifier (server only) */
+var __vue_module_identifier__ = null
+var Component = normalizeComponent(
+  __vue_script__,
+  __vue_template__,
+  __vue_template_functional__,
+  __vue_styles__,
+  __vue_scopeId__,
+  __vue_module_identifier__
+)
+Component.options.__file = "resources/assets/js/components/Answer.vue"
+
+/* hot reload */
+if (false) {(function () {
+  var hotAPI = require("vue-hot-reload-api")
+  hotAPI.install(require("vue"), false)
+  if (!hotAPI.compatible) return
+  module.hot.accept()
+  if (!module.hot.data) {
+    hotAPI.createRecord("data-v-3f387496", Component.options)
+  } else {
+    hotAPI.reload("data-v-3f387496", Component.options)
+  }
+  module.hot.dispose(function (data) {
+    disposed = true
+  })
+})()}
+
+module.exports = Component.exports
+
+
+/***/ }),
+/* 232 */
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Vote_vue__ = __webpack_require__(20);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__Vote_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_0__Vote_vue__);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue__ = __webpack_require__(21);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_1__UserInfo_vue__);
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__mixins_modification_js__ = __webpack_require__(81);
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+
+
+
+
+/* harmony default export */ __webpack_exports__["default"] = ({
+    props: ["answer"],
+
+    mixins: [__WEBPACK_IMPORTED_MODULE_2__mixins_modification_js__["a" /* default */]],
+
+    components: { Vote: __WEBPACK_IMPORTED_MODULE_0__Vote_vue___default.a, UserInfo: __WEBPACK_IMPORTED_MODULE_1__UserInfo_vue___default.a },
+
+    data: function data() {
+        return {
+            body: this.answer.body,
+            bodyhtml: this.answer.bodyhtml,
+            id: this.answer.id,
+            questionId: this.answer.question_id,
+            beforeEditCache: null
+        };
+    },
+
+
+    methods: {
+        setEditCache: function setEditCache() {
+            this.beforeEditCache = this.body;
+        },
+        restoreFromCache: function restoreFromCache() {
+            this.body = this.beforeEditCache;
+        },
+        payload: function payload() {
+            return {
+                body: this.body
+            };
+        },
+        delete: function _delete() {
+            var _this = this;
+
+            axios.delete(this.endpoint).then(function (_ref) {
+                var data = _ref.data;
+
+                _this.$toast.success(data.message, "Success", { timeout: 2000 });
+                _this.$emit("deleted");
+            });
+        }
+    },
+
+    computed: {
+        isInvalid: function isInvalid() {
+            return this.body.length < 10;
+        },
+        endpoint: function endpoint() {
+            return "/questions/" + this.questionId + "/answers/" + this.id;
+        }
+    }
+
+});
+
+/***/ }),
+/* 233 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var render = function() {
+  var _vm = this
+  var _h = _vm.$createElement
+  var _c = _vm._self._c || _h
+  return _c(
+    "div",
+    { staticClass: "media post" },
+    [
+      _c("vote", { attrs: { model: _vm.answer, name: "answer" } }),
+      _vm._v(" "),
+      _c("div", { staticClass: "media-body" }, [
+        _vm.editing
+          ? _c("form", [
+              _c("div", { staticClass: "form-group" }, [
+                _c("textarea", {
+                  directives: [
+                    {
+                      name: "model",
+                      rawName: "v-model",
+                      value: _vm.body,
+                      expression: "body"
+                    }
+                  ],
+                  staticClass: "form-control",
+                  attrs: { rows: "10", required: "" },
+                  domProps: { value: _vm.body },
+                  on: {
+                    input: function($event) {
+                      if ($event.target.composing) {
+                        return
+                      }
+                      _vm.body = $event.target.value
+                    }
+                  }
+                })
+              ]),
+              _vm._v(" "),
+              _c(
+                "button",
+                {
+                  staticClass: "btn btn-primary",
+                  attrs: { type: "button", disabled: _vm.isInvalid },
+                  on: {
+                    click: function($event) {
+                      $event.preventDefault()
+                      return _vm.update($event)
+                    }
+                  }
+                },
+                [_vm._v("Update")]
+              ),
+              _vm._v(" "),
+              _c(
+                "button",
+                {
+                  staticClass: "btn btn-outline-secondary",
+                  on: { click: _vm.cancel }
+                },
+                [_vm._v("Cancel")]
+              )
+            ])
+          : _c("div", [
+              _c("div", { domProps: { innerHTML: _vm._s(_vm.bodyhtml) } }),
+              _vm._v(" "),
+              _c("div", { staticClass: "row" }, [
+                _c("div", { staticClass: "col-4" }, [
+                  _c("div", { staticClass: "ml-auto" }, [
+                    _vm.authorize("modify", _vm.answer)
+                      ? _c(
+                          "a",
+                          {
+                            staticClass: "btn btn-sm btn-outline-info",
+                            on: {
+                              click: function($event) {
+                                $event.preventDefault()
+                                return _vm.edit($event)
+                              }
+                            }
+                          },
+                          [_vm._v("Edit")]
+                        )
+                      : _vm._e(),
+                    _vm._v(" "),
+                    _vm.authorize("modify", _vm.answer)
+                      ? _c(
+                          "button",
+                          {
+                            staticClass: "btn btn-sm btn-outline-danger",
+                            on: { click: _vm.destroy }
+                          },
+                          [_vm._v("Delete")]
+                        )
+                      : _vm._e()
+                  ])
+                ]),
+                _vm._v(" "),
+                _c("div", { staticClass: "col-4" }),
+                _vm._v(" "),
+                _c(
+                  "div",
+                  { staticClass: "col-4" },
+                  [
+                    _c("user-info", {
+                      attrs: { model: _vm.answer, label: "answered" }
+                    })
+                  ],
+                  1
+                )
+              ])
+            ])
+      ])
+    ],
+    1
+  )
+}
+var staticRenderFns = []
+render._withStripped = true
+module.exports = { render: render, staticRenderFns: staticRenderFns }
+if (false) {
+  module.hot.accept()
+  if (module.hot.data) {
+    require("vue-hot-reload-api")      .rerender("data-v-3f387496", module.exports)
+  }
+}
+
+/***/ }),
+/* 234 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var disposed = false
+var normalizeComponent = __webpack_require__(5)
+/* script */
+var __vue_script__ = __webpack_require__(235)
+/* template */
+var __vue_template__ = __webpack_require__(236)
+/* template functional */
+var __vue_template_functional__ = false
+/* styles */
+var __vue_styles__ = null
+/* scopeId */
+var __vue_scopeId__ = null
+/* moduleIdentifier (server only) */
+var __vue_module_identifier__ = null
+var Component = normalizeComponent(
+  __vue_script__,
+  __vue_template__,
+  __vue_template_functional__,
+  __vue_styles__,
+  __vue_scopeId__,
+  __vue_module_identifier__
+)
+Component.options.__file = "resources/assets/js/components/NewAnswer.vue"
+
+/* hot reload */
+if (false) {(function () {
+  var hotAPI = require("vue-hot-reload-api")
+  hotAPI.install(require("vue"), false)
+  if (!hotAPI.compatible) return
+  module.hot.accept()
+  if (!module.hot.data) {
+    hotAPI.createRecord("data-v-96742352", Component.options)
+  } else {
+    hotAPI.reload("data-v-96742352", Component.options)
+  }
+  module.hot.dispose(function (data) {
+    disposed = true
+  })
+})()}
+
+module.exports = Component.exports
+
+
+/***/ }),
+/* 235 */
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+
+/* harmony default export */ __webpack_exports__["default"] = ({
+    props: ['questionId'],
+
+    methods: {
+        create: function create() {
+            var _this = this;
+
+            axios.post("/questions/" + this.questionId + "/answers", {
+                body: this.body
+            }).catch(function (error) {
+                _this.$toast.error(error.response.data.message, "Error");
+            }).then(function (_ref) {
+                var data = _ref.data;
+
+                _this.$toast.success(data.message, "Success");
+                _this.body = '';
+                _this.$emit('created', data.answer);
+            });
+        }
+    },
+
+    data: function data() {
+        return {
+            body: ''
+        };
+    },
+
+
+    computed: {
+        isInvalid: function isInvalid() {
+            return !this.signedIn || this.body.length < 10;
+        }
+    }
+});
+
+/***/ }),
+/* 236 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var render = function() {
+  var _vm = this
+  var _h = _vm.$createElement
+  var _c = _vm._self._c || _h
+  return _c("div", { staticClass: "row mt-4" }, [
+    _c("div", { staticClass: "col-md-12" }, [
+      _c("div", { staticClass: "card" }, [
+        _c("div", { staticClass: "card-body" }, [
+          _vm._m(0),
+          _vm._v(" "),
+          _c("hr"),
+          _vm._v(" "),
+          _c(
+            "form",
+            {
+              on: {
+                submit: function($event) {
+                  $event.preventDefault()
+                  return _vm.create($event)
+                }
+              }
+            },
+            [
+              _c("div", { staticClass: "form-group" }, [
+                _c("textarea", {
+                  directives: [
+                    {
+                      name: "model",
+                      rawName: "v-model",
+                      value: _vm.body,
+                      expression: "body"
+                    }
+                  ],
+                  staticClass: "form-control",
+                  attrs: { rows: "7", required: "", name: "body" },
+                  domProps: { value: _vm.body },
+                  on: {
+                    input: function($event) {
+                      if ($event.target.composing) {
+                        return
+                      }
+                      _vm.body = $event.target.value
+                    }
+                  }
+                })
+              ]),
+              _vm._v(" "),
+              _c("div", { staticClass: "form-group" }, [
+                _c(
+                  "button",
+                  {
+                    staticClass: "btn btn-lg btn-outline-primary",
+                    attrs: { type: "submit", disabled: _vm.isInvalid }
+                  },
+                  [_vm._v("Submit")]
+                )
+              ])
+            ]
+          )
+        ])
+      ])
+    ])
+  ])
+}
+var staticRenderFns = [
+  function() {
+    var _vm = this
+    var _h = _vm.$createElement
+    var _c = _vm._self._c || _h
+    return _c("div", { staticClass: "card-title" }, [
+      _c("h3", [_vm._v("Your Answer")])
+    ])
+  }
+]
+render._withStripped = true
+module.exports = { render: render, staticRenderFns: staticRenderFns }
+if (false) {
+  module.hot.accept()
+  if (module.hot.data) {
+    require("vue-hot-reload-api")      .rerender("data-v-96742352", module.exports)
+  }
+}
+
+/***/ }),
+/* 237 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var render = function() {
+  var _vm = this
+  var _h = _vm.$createElement
+  var _c = _vm._self._c || _h
+  return _c(
+    "div",
+    [
+      _vm.count
+        ? _c("div", { staticClass: "row mt-4" }, [
+            _c("div", { staticClass: "col-md-12" }, [
+              _c("div", { staticClass: "card" }, [
+                _c(
+                  "div",
+                  { staticClass: "card-body" },
+                  [
+                    _c("div", { staticClass: "card-title" }, [
+                      _c("h2", [_vm._v(_vm._s(_vm.title))])
+                    ]),
+                    _vm._v(" "),
+                    _c("hr"),
+                    _vm._v(" "),
+                    _vm._l(_vm.answers, function(answer, index) {
+                      return _c("answer", {
+                        key: answer.id,
+                        attrs: { answer: answer },
+                        on: {
+                          deleted: function($event) {
+                            return _vm.remove(index)
+                          }
+                        }
+                      })
+                    }),
+                    _vm._v(" "),
+                    _vm.nextUrl
+                      ? _c("div", { staticClass: "text-center mt-3" }, [
+                          _c(
+                            "button",
+                            {
+                              staticClass: "btn btn-outline-secondary",
+                              on: {
+                                click: function($event) {
+                                  $event.preventDefault()
+                                  return _vm.fetch(_vm.nextUrl)
+                                }
+                              }
+                            },
+                            [_vm._v("Load more answers")]
+                          )
+                        ])
+                      : _vm._e()
+                  ],
+                  2
+                )
+              ])
+            ])
+          ])
+        : _vm._e(),
+      _vm._v(" "),
+      _c("new-answer", {
+        attrs: { "question-id": _vm.question.id },
+        on: { created: _vm.add }
+      })
+    ],
+    1
+  )
+}
+var staticRenderFns = []
+render._withStripped = true
+module.exports = { render: render, staticRenderFns: staticRenderFns }
+if (false) {
+  module.hot.accept()
+  if (module.hot.data) {
+    require("vue-hot-reload-api")      .rerender("data-v-2fc0920e", module.exports)
+  }
+}
+
+/***/ }),
+/* 238 */
+/***/ (function(module, exports, __webpack_require__) {
+
+var render = function() {
+  var _vm = this
+  var _h = _vm.$createElement
+  var _c = _vm._self._c || _h
+  return _c(
+    "div",
+    { staticClass: "container" },
+    [
+      _c("question", { attrs: { question: _vm.question } }),
+      _vm._v(" "),
+      _c("answers", { attrs: { question: _vm.question } })
+    ],
+    1
+  )
+}
+var staticRenderFns = []
+render._withStripped = true
+module.exports = { render: render, staticRenderFns: staticRenderFns }
+if (false) {
+  module.hot.accept()
+  if (module.hot.data) {
+    require("vue-hot-reload-api")      .rerender("data-v-e5750c5c", module.exports)
+  }
+}
+
+/***/ }),
+/* 239 */
+/***/ (function(module, exports) {
+
+// removed by extract-text-webpack-plugin
 
 /***/ })
 /******/ ]);
