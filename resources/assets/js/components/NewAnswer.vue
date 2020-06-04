@@ -24,11 +24,12 @@
 </template>
 
 <script>
-import MEditor from "./MEditor.vue"
+import MEditor from './MEditor.vue';
+
 export default {
     props: ['questionId'],
 
-    components:{MEditor},
+    components: { MEditor },
 
     methods: {
         create () {

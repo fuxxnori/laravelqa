@@ -2,8 +2,13 @@ import Prism from "prismjs";
 
 export default{
     methods:{
-        highlight(){
-            const el = this.$refs.bodyhtml;
+        highlight(id = ""){
+            let el;
+            if(!id){
+                el = this.$refs.bodyhtml;
+            }else{
+                el = document.getElementById(id);
+            }
             console.log("el",el);
             if(el) Prism.highlightAllUnder(el);
         }
