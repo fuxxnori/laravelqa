@@ -10,7 +10,7 @@
                     <div class="media">
                         <div class="media-body">
                             <div class="form-group">
-                                <m-editor :body="body">
+                                <m-editor :body="body" :name="uniqueName">
                                     <textarea rows="10" v-model="body" class="form-control" required></textarea>
                                 </m-editor>
                             </div>
@@ -56,14 +56,9 @@
 </template>
 
 <script>
-import Vote from "./Vote.vue";
-import UserInfo from "./UserInfo.vue";
-import MEditor from "../components/MEditor.vue"
 import modification from "../mixins/modification.js";
 export default {
     props:["question"],
-    
-    components:{Vote,UserInfo,MEditor},
 
     mixins:[modification],
 
@@ -84,6 +79,9 @@ export default {
 
         endpoint(){
             return `/questions/${this.id}`;
+        },
+        uniqueName(){
+            return `question-${this.id}`;
         }
     },
 
