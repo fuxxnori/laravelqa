@@ -8,19 +8,20 @@ use App\Http\Requests\AskQuestionRequest;
 
 class QuestionsController extends Controller
 {
-    public function __construct()
-    {
-        $this->middleware("auth",["except"=>["index","show"]]);
+    public function __construct() {
+        $this->middleware('auth', ['except' => ['index', 'show']]);
     }
+
     /**
      * Display a listing of the resource.
      *
      * @return \Illuminate\Http\Response
      */
     public function index()
-    {
-        $questions = Question::with("user")->latest()->paginate(5);
-        return view("questions.index", compact("questions"));
+    {        
+        $questions = Question::with('user')->latest()->paginate(10);
+
+        return view('questions.index', compact('questions'));        
     }
 
     /**
@@ -32,7 +33,7 @@ class QuestionsController extends Controller
     {
         $question = new Question();
 
-        return view("questions.create", compact("question"));
+        return view('questions.create', compact('question'));
     }
 
     /**
@@ -43,8 +44,9 @@ class QuestionsController extends Controller
      */
     public function store(AskQuestionRequest $request)
     {
-        $request->user()->questions()->create($request->only("title","body"));
-        return redirect()->route("questions.index")->with("success", "Your question has been submitted");
+        $request->user()->questions()->create($request->only('title', 'body'));
+
+        return redirect()->route('questions.index')->with('success', "Your question has been submitted");
     }
 
     /**
@@ -55,11 +57,9 @@ class QuestionsController extends Controller
      */
     public function show(Question $question)
     {
-        $question->increment("views");
-        //$question->views = $question->views + 1;
-        //$question->save();
+        $question->increment('views');
 
-        return view("questions.show", compact("question"));
+        return view('questions.show', compact('question'));
     }
 
     /**
@@ -71,33 +71,52 @@ class QuestionsController extends Controller
     public function edit(Question $question)
     {
         $this->authorize("update", $question);
-        return view("questions.edit", compact("question"));
+        return view("questions.edit", compact('question'));
     }
 
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  \App\Question  $question
+     * @return \Illuminate\Http\Response
+     */
     public function update(AskQuestionRequest $request, Question $question)
     {
         $this->authorize("update", $question);
-        $question->update($request->only("title", "body"));
-        if($request->expectsJson()){
+
+        $question->update($request->only('title', 'body'));
+
+        if ($request->expectsJson())
+        {
             return response()->json([
-                "message"=>"Your question has been updated",
-                "bodyhtml"=>$question->body_html
+                'message' => "Your question has been updated.",
+                'body_html' => $question->body_html
             ]);
         }
-        return redirect()->route("questions.index")->with("success", "Your question has been updated");
+
+        return redirect('/questions')->with('success', "Your question has been updated.");
     }
 
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  \App\Question  $question
+     * @return \Illuminate\Http\Response
+     */
     public function destroy(Question $question)
     {
         $this->authorize("delete", $question);
-        $question->delete();
-        if(request()->expectsJson())
-        {
-                return response()->json([
-                    "message"=>"Your question has been deleted."
-                ]);
 
+        $question->delete();
+
+        if (request()->expectsJson()) 
+        {
+            return response()->json([
+                'message' => "Your question has been deleted."
+            ]);
         }
-        return redirect("/questions")->with("success", "Your question has been deleted.");
+
+        return redirect('/questions')->with('success', "Your question has been deleted.");
     }
 }
